@@ -61,14 +61,27 @@ export default function Bookings() {
       // Map backend fields to UI fields
       const formatted = response.data.map((b) => ({
         id: b._id,
-        name: b.hostelName,
-        checkIn: b.checkInDate?.split("T")[0],
-        duration: `${b.duration} ${b.durationType}`,
-        amount: `₹${b.amountPaid}`,
-        sharing: b.sharingType,
-        roomNumber: b.roomNumber,
-        status: b.bookingStatus === "confirmed" ? "Confirmed" : "Pending",
+
+        name: b.hostel?.hostelName ?? "Unknown Hostel",
+
+        checkIn: b.bookingDetails?.checkInDate
+          ? b.bookingDetails.checkInDate.split("T")[0]
+          : "--",
+
+        duration: `${b.bookingDetails?.duration ?? 0} ${b.bookingDetails?.durationType ?? ""}`,
+
+        amount: `₹${b.bookingDetails?.amountPaid ?? 0}`,
+
+        sharing: b.room?.sharingType ?? "--",
+
+        roomNumber: b.room?.roomNumber ?? "--",
+
+        status:
+          b.status?.bookingStatus === "confirmed"
+            ? "Confirmed"
+            : "Pending",
       }));
+
 
       setBookingsData(formatted);
     } catch (error) {
