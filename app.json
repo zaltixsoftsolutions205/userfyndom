@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "StudentApp",
+    "name": "Fyndom",
     "slug": "StudentApp",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -16,7 +16,8 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "package": "com.anjali_23.StudentApp"
     },
     "web": {
       "bundler": "metro",
@@ -38,6 +39,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d9ffa78f-51f1-40c7-ad2b-66f6061aaa7e"
+      }
     }
   }
 }

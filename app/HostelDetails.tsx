@@ -16,7 +16,7 @@ import {
   RefreshControl
 } from 'react-native';
 import Toast from 'react-native-toast-message';
-import MapViewWrapper from '../components/MapViewWrapper';
+// import MapViewWrapper from '../components/MapViewWrapper';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../app/reduxStore/store/store';
 import { getStartingPrice, getHostelFacilities, getHostelRooms } from '../app/reduxStore/reduxSlices/hostelSlice';
@@ -1012,11 +1012,11 @@ export default function HostelDetails() {
           <View style={styles.coordinatesContainer}>
             <Text style={styles.coordinatesText}>📍 {hostelData.coordinates?.latitude?.toFixed(6) || '17.385044'}, {hostelData.coordinates?.longitude?.toFixed(6) || '78.486671'}</Text>
           </View>
-          <MapViewWrapper
+          {/* <MapViewWrapper
             latitude={hostelData.coordinates?.latitude || 17.385044}
             longitude={hostelData.coordinates?.longitude || 78.486671}
             title={hostelData?.name || 'Hostel Location'}
-          />
+          /> */}
         </View>
       </ScrollView>
 
