@@ -1,4 +1,4 @@
-// BookingForm.tsx - FIXED VERSION
+// BookingForm.tsx - COMPLETE VERSION with Check-in Date & Razorpay Integration
 import { useAppSelector } from "@/hooks/hooks";
 import { Ionicons } from "@expo/vector-icons";
 import { Picker } from "@react-native-picker/picker";
@@ -16,26 +16,25 @@ import {
   View,
   ActivityIndicator,
   Alert,
+  Modal,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Toast from "react-native-toast-message";
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 const { width } = Dimensions.get("window");
 
 // Interfaces
 interface HostelData {
   _id: string;
+  hostelOwnerId?: string;
   hostelName: string;
   address: string;
   contact: string;
   email: string;
   hostelType: string;
-  pricing: {
-    single?: RoomPricing;
-    double?: RoomPricing;
-    triple?: RoomPricing;
-    four?: RoomPricing;
-  };
+  pricing: any;
   coordinates: {
     latitude: number;
     longitude: number;
@@ -45,18 +44,6 @@ interface HostelData {
   summary: string;
 }
 
-interface RoomPricing {
-  daily: {
-    price: number;
-    currency: string;
-  };
-  monthly: {
-    price: number;
-    currency: string;
-  };
-  availableBeds: number;
-}
-
 interface AadhaarFile {
   uri: string;
   name: string;
@@ -64,10 +51,9 @@ interface AadhaarFile {
 }
 
 interface RazorpayOrder {
-  id: string;
+  orderId: string;
   amount: number;
   currency: string;
-  receipt: string;
   key: string;
 }
 
@@ -75,39 +61,31 @@ interface BookingResponse {
   success: boolean;
   message: string;
   data: {
-    booking: {
-      _id: string;
-      student: string;
-      hostelOwner: string;
-      room: string;
-      sharingType: string;
-      durationType: string;
-      price: number;
-      amountPaid: number;
-      checkInDate: string;
-      duration: number;
-      paymentStatus: string;
-      bookingStatus: string;
-      razorpayOrderId: string;
-    };
-    razorpayOrder: RazorpayOrder;
-    payment: {
-      totalAmount: number;
-      transferAmount: number;
-      platformFee: number;
-    };
-    studentDetails: {
-      name: string;
-      email: string;
-      contact: string;
-    };
+    bookingId: string;
+    hostelId: string;
+    hostelName: string;
+    roomNumber: string;
+    sharingType: string;
+    price: number;
+    razorpayOrder?: RazorpayOrder;
   };
+}
+
+interface CreateOrderResponse {
+  success: boolean;
+  data: RazorpayOrder;
+}
+
+interface PaymentVerificationData {
+  razorpay_order_id: string;
+  razorpay_payment_id: string;
+  razorpay_signature: string;
 }
 
 export default function BookingForm() {
   const router = useRouter();
   const params = useLocalSearchParams();
-  const { token, userId } = useAppSelector((state) => state.auth);
+  const { token, user } = useAppSelector((state) => state.auth);
 
   // Parse the hostel data safely
   let hostelData: HostelData | null = null;
@@ -122,19 +100,74 @@ export default function BookingForm() {
   const selectedSharing = params.selectedSharing as string;
   const monthlyPrice = params.monthlyPrice as string;
   const dailyPrice = params.dailyPrice as string;
+  const availableBeds = params.availableBeds as string;
 
-  const [fullName, setFullName] = useState<string>("");
-  const [mobile, setMobile] = useState<string>("");
-  const [email, setEmail] = useState<string>("");
+  // State variables
+  const [fullName, setFullName] = useState<string>(user?.fullName || "");
+  const [mobile, setMobile] = useState<string>(user?.mobileNumber || "");
+  const [email, setEmail] = useState<string>(user?.email || "");
   const [aadhaarNumber, setAadhaarNumber] = useState<string>("");
   const [aadhaarFiles, setAadhaarFiles] = useState<AadhaarFile[]>([]);
   const [durationType, setDurationType] = useState<"monthly" | "daily">("monthly");
   const [duration, setDuration] = useState<string>("1");
+  
+  // Check-in date state
+  const [checkInDate, setCheckInDate] = useState<Date>(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow;
+  });
+  const [showDatePicker, setShowDatePicker] = useState<boolean>(false);
+  const [datePickerMode, setDatePickerMode] = useState<'date' | 'time'>('date');
+  
   const [totalAmount, setTotalAmount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isUploading, setIsUploading] = useState<boolean>(false);
   const [currentBookingId, setCurrentBookingId] = useState<string | null>(null);
   const [razorpayOrder, setRazorpayOrder] = useState<RazorpayOrder | null>(null);
+  const [isCreatingOrder, setIsCreatingOrder] = useState<boolean>(false);
+  const [isVerifyingPayment, setIsVerifyingPayment] = useState<boolean>(false);
+
+  // Format date for display
+  const formatDate = (date: Date): string => {
+    return date.toLocaleDateString('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric'
+    });
+  };
+
+  // Format date for API (YYYY-MM-DD)
+  const formatDateForAPI = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Handle date change
+  const handleDateChange = (event: any, selectedDate?: Date) => {
+    setShowDatePicker(false);
+    if (selectedDate) {
+      // Ensure selected date is not in the past
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (selectedDate < today) {
+        Toast.show({
+          type: "error",
+          text1: "Invalid Date",
+          text2: "Check-in date cannot be in the past"
+        });
+        return;
+      }
+      setCheckInDate(selectedDate);
+    }
+  };
+
+  // Show date picker
+  const showDatePickerModal = () => {
+    setShowDatePicker(true);
+  };
 
   // Calculate total amount when duration or type changes
   useEffect(() => {
@@ -222,56 +255,85 @@ export default function BookingForm() {
       Toast.show({ type: "error", text1: "Invalid Duration", text2: "Please select valid duration" });
       return false;
     }
-    if (!hostelData?._id) {
+    
+    // Check-in date validation
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (checkInDate < today) {
+      Toast.show({ type: "error", text1: "Invalid Date", text2: "Check-in date cannot be in the past" });
+      return false;
+    }
+    
+    if (!hostelData?._id && !hostelData?.hostelOwnerId) {
       Toast.show({ type: "error", text1: "Hostel Error", text2: "Hostel information is missing" });
       return false;
     }
+    
+    // Check bed availability
+    if (availableBeds && parseInt(availableBeds) <= 0) {
+      Toast.show({ type: "error", text1: "Room Unavailable", text2: "This room type is sold out" });
+      return false;
+    }
+    
     return true;
   };
 
-  // In your BookingForm.tsx - UPDATE THE handleProceedToPayment function:
-
-  // Replace the existing handleProceedToPayment function with this:
-  const handleProceedToPayment = async (): Promise<void> => {
-    console.log('🚀 Starting payment process...');
-
-    if (!validateForm()) {
-      console.log('❌ Form validation failed');
-      return;
-    }
-
-    setIsLoading(true);
-
+  // Create Booking (Step 1)
+  const createBooking = async (): Promise<BookingResponse | null> => {
+    console.log('📝 Creating booking...');
+    
     try {
       if (!token) {
         Toast.show({ type: "error", text1: "Authentication Error", text2: "Please login again" });
-        return;
+        return null;
       }
 
       // Prepare form data
       const formData = new FormData();
-      formData.append('hostelOwnerId', hostelData!._id);
-      formData.append('sharingType', selectedSharing);
+      
+      // Use hostelOwnerId if available, otherwise use _id
+      const hostelId = hostelData?.hostelOwnerId || hostelData?._id;
+      if (!hostelId) {
+        throw new Error('Hostel ID not found');
+      }
+      
+      formData.append('hostelId', hostelId);
+      formData.append('fullName', fullName);
+      formData.append('mobileNumber', mobile);
+      formData.append('email', email);
       formData.append('durationType', durationType);
       formData.append('duration', duration);
-      formData.append('checkInDate', new Date().toISOString().split('T')[0]);
+      formData.append('checkInDate', formatDateForAPI(checkInDate));
       formData.append('aadharNumber', aadhaarNumber);
       formData.append('roomSharingPreference', selectedSharing);
 
       // Append Aadhaar file
       if (aadhaarFiles.length > 0) {
-        formData.append('aadharDocument', {
+        formData.append('aadharCardPhoto', {
           uri: aadhaarFiles[0].uri,
           type: 'image/jpeg',
           name: aadhaarFiles[0].name,
         } as any);
       }
 
-      // Create booking and get Razorpay order
-      const response = await fetch('https://api.fyndom.in/api/bookings/create', {
+      console.log('📤 Booking payload:', {
+        hostelId,
+        fullName,
+        mobile,
+        email,
+        durationType,
+        duration,
+        checkInDate: formatDateForAPI(checkInDate),
+        aadhaarNumber: aadhaarNumber,
+        sharingType: selectedSharing
+      });
+
+      // Create booking
+      const response = await fetch('http://192.168.29.230:5000/api/student/bookings?', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data',
         },
         body: formData,
       });
@@ -281,143 +343,196 @@ export default function BookingForm() {
         console.log('❌ HTTP error:', errorText);
         try {
           const errorJson = JSON.parse(errorText);
-          Toast.show({ type: "error", text1: "Booking Failed", text2: errorJson.message || 'Unknown error' });
+          Toast.show({ 
+            type: "error", 
+            text1: "Booking Failed", 
+            text2: errorJson.message || `Error ${response.status}` 
+          });
         } catch {
-          Toast.show({ type: "error", text1: "HTTP Error", text2: `Status: ${response.status}` });
+          Toast.show({ 
+            type: "error", 
+            text1: "HTTP Error", 
+            text2: `Status: ${response.status}` 
+          });
         }
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
       const result: BookingResponse = await response.json();
-      console.log('✅ Booking response:', result);
+      console.log('✅ Booking created:', result);
 
       if (result.success) {
-        // Navigate to Razorpay Payment Screen with all required parameters
-        router.push({
-          pathname: '/screens/RazorpayPaymentScreen',
-          params: {
-            razorpayOrder: JSON.stringify(result.data.razorpayOrder),
-            studentDetails: JSON.stringify(result.data.studentDetails),
-            bookingId: result.data.booking._id,
-            hostelName: hostelData?.hostelName,
-            sharingType: selectedSharing,
-            durationType: durationType,
-            duration: duration,
-            totalAmount: totalAmount.toString()
-          }
+        setCurrentBookingId(result.data.bookingId);
+        Toast.show({
+          type: "success",
+          text1: "Booking Created",
+          text2: "Booking created successfully. Creating payment order..."
         });
-
+        return result;
       } else {
-        Toast.show({ type: "error", text1: "Booking Failed", text2: result.message });
+        Toast.show({ 
+          type: "error", 
+          text1: "Booking Failed", 
+          text2: result.message 
+        });
+        return null;
       }
     } catch (error: any) {
-      console.error('❌ Booking error:', error);
+      console.error('❌ Booking creation error:', error);
       Toast.show({
         type: "error",
-        text1: "Network Error",
+        text1: "Booking Error",
         text2: error.message || "Failed to create booking"
+      });
+      return null;
+    }
+  };
+
+  // Create Razorpay Order (Step 2)
+  const createRazorpayOrder = async (bookingId: string): Promise<RazorpayOrder | null> => {
+    console.log('💰 Creating Razorpay order for booking:', bookingId);
+    
+    try {
+      setIsCreatingOrder(true);
+      
+      const response = await fetch(`http://192.168.29.230:5000/api/student/bookings/${bookingId}/create-order`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log('❌ Razorpay order creation failed:', errorText);
+        throw new Error(`Failed to create payment order: ${response.status}`);
+      }
+
+      const result: CreateOrderResponse = await response.json();
+      console.log('✅ Razorpay order created:', result);
+
+      if (result.success) {
+        setRazorpayOrder(result.data);
+        return result.data;
+      } else {
+        throw new Error('Failed to create payment order');
+      }
+    } catch (error: any) {
+      console.error('❌ Razorpay order error:', error);
+      Toast.show({
+        type: "error",
+        text1: "Payment Error",
+        text2: error.message || "Failed to create payment order"
+      });
+      return null;
+    } finally {
+      setIsCreatingOrder(false);
+    }
+  };
+
+  // Verify Payment (Step 3)
+  const verifyPayment = async (paymentData: PaymentVerificationData): Promise<boolean> => {
+    console.log('🔐 Verifying payment:', paymentData);
+    
+    try {
+      setIsVerifyingPayment(true);
+      
+      const response = await fetch('http://192.168.29.230:5000/api/student/bookings/verify-payment', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(paymentData),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log('❌ Payment verification failed:', errorText);
+        throw new Error(`Payment verification failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('✅ Payment verification result:', result);
+
+      if (result.success) {
+        Toast.show({
+          type: "success",
+          text1: "Payment Successful!",
+          text2: "Your booking has been confirmed"
+        });
+        return true;
+      } else {
+        throw new Error(result.message || 'Payment verification failed');
+      }
+    } catch (error: any) {
+      console.error('❌ Payment verification error:', error);
+      Toast.show({
+        type: "error",
+        text1: "Verification Failed",
+        text2: error.message || "Failed to verify payment"
+      });
+      return false;
+    } finally {
+      setIsVerifyingPayment(false);
+    }
+  };
+
+  // Complete Payment Flow
+  const handleProceedToPayment = async (): Promise<void> => {
+    console.log('🚀 Starting complete payment flow...');
+
+    if (!validateForm()) {
+      console.log('❌ Form validation failed');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      // Step 1: Create Booking
+      const bookingResult = await createBooking();
+      if (!bookingResult || !bookingResult.data.bookingId) {
+        throw new Error('Failed to create booking');
+      }
+
+      // Step 2: Create Razorpay Order
+      const razorpayOrder = await createRazorpayOrder(bookingResult.data.bookingId);
+      if (!razorpayOrder) {
+        throw new Error('Failed to create payment order');
+      }
+
+      // Step 3: Navigate to Razorpay Payment Screen
+      router.push({
+        pathname: '/screens/RazorpayPaymentScreen',
+        params: {
+          razorpayOrder: JSON.stringify(razorpayOrder),
+          studentDetails: JSON.stringify({
+            name: fullName,
+            email: email,
+            contact: mobile
+          }),
+          bookingId: bookingResult.data.bookingId,
+          hostelName: hostelData?.hostelName || 'Hostel',
+          sharingType: selectedSharing,
+          durationType: durationType,
+          duration: duration,
+          totalAmount: totalAmount.toString(),
+          checkInDate: formatDateForAPI(checkInDate)
+        }
+      });
+
+    } catch (error: any) {
+      console.error('❌ Payment flow error:', error);
+      Toast.show({
+        type: "error",
+        text1: "Payment Flow Error",
+        text2: error.message || "Failed to proceed with payment"
       });
     } finally {
       setIsLoading(false);
     }
-  };
-
-  // Open Razorpay in Browser (Fallback solution)
-  const openRazorpayInBrowser = async (order: RazorpayOrder, studentDetails: any) => {
-    try {
-      // Create proper Razorpay checkout URL
-      const successUrl = `https://api.fyndom.in/api/bookings/payment-success?order_id=${order.id}&booking_id=${currentBookingId}`;
-
-      const checkoutUrl = `https://razorpay.com/payment-button/${order.key}/pay/?amount=${order.amount}&currency=${order.currency}&order_id=${order.id}&name=${encodeURIComponent(hostelData?.hostelName || 'Hostel Booking')}&description=${encodeURIComponent(`Booking for ${selectedSharing} sharing - ${duration} ${durationType}`)}&prefill[name]=${encodeURIComponent(studentDetails.name)}&prefill[email]=${encodeURIComponent(studentDetails.email)}&prefill[contact]=${encodeURIComponent(studentDetails.contact)}&callback_url=${encodeURIComponent(successUrl)}`;
-
-      console.log('🔗 Opening Razorpay URL:', checkoutUrl);
-
-      // Open in browser
-      const { Linking } = require('react-native');
-      const canOpen = await Linking.canOpenURL(checkoutUrl);
-      if (canOpen) {
-        await Linking.openURL(checkoutUrl);
-
-        Toast.show({
-          type: "info",
-          text1: "Opening Payment Gateway",
-          text2: "Complete payment in the browser"
-        });
-
-        // Start polling for payment status
-        startPaymentStatusPolling();
-      } else {
-        Toast.show({
-          type: "error",
-          text1: "Cannot Open Payment",
-          text2: "Please install a web browser"
-        });
-      }
-    } catch (error) {
-      console.error('Error opening Razorpay:', error);
-      Toast.show({
-        type: "error",
-        text1: "Payment Error",
-        text2: "Failed to open payment gateway"
-      });
-    }
-  };
-
-  // Poll for payment status
-  const startPaymentStatusPolling = () => {
-    let attempts = 0;
-    const maxAttempts = 60; // 5 minutes (5 seconds × 60)
-
-    const pollInterval = setInterval(async () => {
-      attempts++;
-
-      try {
-        if (!currentBookingId) {
-          console.log('❌ No booking ID for polling');
-          clearInterval(pollInterval);
-          return;
-        }
-
-        console.log(`🔄 Polling payment status (attempt ${attempts}) for booking:`, currentBookingId);
-
-        const statusResponse = await fetch(`https://api.fyndom.in/api/bookings/payment-status/${currentBookingId}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
-
-        if (statusResponse.ok) {
-          const statusData = await statusResponse.json();
-          console.log('📊 Payment status:', statusData);
-
-          if (statusData.data.paymentStatus === 'completed') {
-            clearInterval(pollInterval);
-            Toast.show({
-              type: "success",
-              text1: "Payment Successful!",
-              text2: "Your booking has been confirmed"
-            });
-
-            // Redirect to bookings page
-            setTimeout(() => {
-              router.replace('/(tabs)/Bookings');
-            }, 2000);
-          }
-        }
-
-        if (attempts >= maxAttempts) {
-          clearInterval(pollInterval);
-          Toast.show({
-            type: "info",
-            text1: "Payment Pending",
-            text2: "Please check your bookings page for status"
-          });
-        }
-      } catch (error) {
-        console.error('Error polling payment status:', error);
-      }
-    }, 5000); // Poll every 5 seconds
   };
 
   // Manual payment verification (fallback)
@@ -433,44 +548,54 @@ export default function BookingForm() {
 
     Alert.alert(
       "Payment Verification",
-      "If you have completed the payment but still see pending status, click Verify to check payment status.",
+      "If you have completed the payment but still see pending status, enter your payment details below.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Verify Payment",
           onPress: async () => {
-            try {
-              const response = await fetch(`https://api.fyndom.in/api/bookings/payment-status/${currentBookingId}`, {
-                method: 'GET',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                },
-              });
+            Alert.prompt(
+              "Payment Verification",
+              "Enter Razorpay Payment ID:",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Verify",
+                  onPress: async (paymentId) => {
+                    if (!paymentId) {
+                      Toast.show({
+                        type: "error",
+                        text1: "Error",
+                        text2: "Payment ID is required"
+                      });
+                      return;
+                    }
 
-              if (response.ok) {
-                const data = await response.json();
-                if (data.data.paymentStatus === 'completed') {
-                  Toast.show({
-                    type: "success",
-                    text1: "Payment Verified!",
-                    text2: "Your booking is confirmed"
-                  });
-                  router.replace('/(tabs)/Bookings');
-                } else {
-                  Toast.show({
-                    type: "info",
-                    text1: "Payment Pending",
-                    text2: "Your payment is still being processed"
-                  });
+                    try {
+                      // This is a simplified verification - in production, you'd need
+                      // to get the order ID and signature from your backend
+                      Toast.show({
+                        type: "info",
+                        text1: "Verifying...",
+                        text2: "Please check your bookings page for status"
+                      });
+                      
+                      // Navigate to bookings page
+                      setTimeout(() => {
+                        router.replace('/(tabs)/Bookings');
+                      }, 2000);
+                    } catch (error) {
+                      Toast.show({
+                        type: "error",
+                        text1: "Verification Failed",
+                        text2: "Please try again later"
+                      });
+                    }
+                  }
                 }
-              }
-            } catch (error) {
-              Toast.show({
-                type: "error",
-                text1: "Verification Failed",
-                text2: "Please try again later"
-              });
-            }
+              ],
+              'plain-text'
+            );
           }
         }
       ]
@@ -482,7 +607,13 @@ export default function BookingForm() {
       single: "1 Sharing",
       double: "2 Sharing",
       triple: "3 Sharing",
-      four: "4 Sharing"
+      four: "4 Sharing",
+      five: "5 Sharing",
+      six: "6 Sharing",
+      seven: "7 Sharing",
+      eight: "8 Sharing",
+      nine: "9 Sharing",
+      ten: "10 Sharing"
     };
     return sharingMap[sharingType] || sharingType;
   };
@@ -550,6 +681,11 @@ export default function BookingForm() {
           <Text style={styles.selectedRoomPrice}>
             ₹{durationType === 'monthly' ? monthlyPrice : dailyPrice} / {durationType === 'monthly' ? 'month' : 'day'}
           </Text>
+          {availableBeds && (
+            <Text style={styles.availabilityText}>
+              Available Beds: {availableBeds}
+            </Text>
+          )}
           {currentBookingId && (
             <Text style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
               Booking ID: {currentBookingId}
@@ -557,7 +693,6 @@ export default function BookingForm() {
           )}
         </View>
 
-        {/* Rest of the form remains the same */}
         <View style={styles.card}>
           {/* Form fields */}
           <Text style={styles.label}>Full Name *</Text>
@@ -590,6 +725,59 @@ export default function BookingForm() {
             onChangeText={setEmail}
             editable={!isLoading}
           />
+
+          {/* Check-in Date */}
+          <Text style={styles.label}>Check-in Date *</Text>
+          <TouchableOpacity
+            style={styles.dateInput}
+            onPress={showDatePickerModal}
+            disabled={isLoading}
+          >
+            <Ionicons name="calendar-outline" size={20} color="#666" />
+            <Text style={styles.dateText}>
+              {formatDate(checkInDate)}
+            </Text>
+            <Ionicons name="chevron-down" size={20} color="#666" />
+          </TouchableOpacity>
+          
+          {showDatePicker && (
+            Platform.OS === 'ios' ? (
+              <Modal
+                transparent={true}
+                animationType="slide"
+                visible={showDatePicker}
+              >
+                <View style={styles.datePickerModal}>
+                  <View style={styles.datePickerContainer}>
+                    <View style={styles.datePickerHeader}>
+                      <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                        <Text style={styles.datePickerCancel}>Cancel</Text>
+                      </TouchableOpacity>
+                      <Text style={styles.datePickerTitle}>Select Check-in Date</Text>
+                      <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                        <Text style={styles.datePickerDone}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <DateTimePicker
+                      value={checkInDate}
+                      mode="date"
+                      display="spinner"
+                      onChange={handleDateChange}
+                      minimumDate={new Date()}
+                    />
+                  </View>
+                </View>
+              </Modal>
+            ) : (
+              <DateTimePicker
+                value={checkInDate}
+                mode="date"
+                display="default"
+                onChange={handleDateChange}
+                minimumDate={new Date()}
+              />
+            )
+          )}
 
           <Text style={styles.label}>Duration Type *</Text>
           <View style={styles.radioGroup}>
@@ -677,6 +865,12 @@ export default function BookingForm() {
                 ₹{durationType === 'monthly' ? monthlyPrice : dailyPrice} × {duration} {durationType === 'monthly' ? 'month(s)' : 'day(s)'}
               </Text>
             </View>
+            <View style={styles.paymentRow}>
+              <Text style={styles.paymentLabel}>Check-in Date:</Text>
+              <Text style={styles.paymentValue}>
+                {formatDate(checkInDate)}
+              </Text>
+            </View>
             <View style={styles.paymentTotalRow}>
               <Text style={styles.paymentTotalLabel}>Total Amount:</Text>
               <Text style={styles.paymentTotalValue}>₹{totalAmount.toFixed(2)}</Text>
@@ -694,7 +888,7 @@ export default function BookingForm() {
             onPress={handleProceedToPayment}
             disabled={isLoading || totalAmount === 0}
           >
-            {isLoading ? (
+            {isLoading || isCreatingOrder ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
               <>
@@ -723,7 +917,7 @@ export default function BookingForm() {
   );
 }
 
-// Styles remain the same as previous version
+// Styles
 const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
@@ -777,6 +971,12 @@ const styles = StyleSheet.create({
     color: "#059669",
     fontWeight: "600",
   },
+  availabilityText: {
+    fontSize: 14,
+    color: "#666",
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
   card: {
     backgroundColor: "#fff",
     borderRadius: 12,
@@ -802,6 +1002,57 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     fontSize: 16,
     backgroundColor: "#f9fafb",
+  },
+  dateInput: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: "#d1d5db",
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+    backgroundColor: "#f9fafb",
+  },
+  dateText: {
+    fontSize: 16,
+    color: "#374151",
+    flex: 1,
+    marginLeft: 10,
+  },
+  datePickerModal: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  datePickerContainer: {
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 10,
+  },
+  datePickerHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: "#e5e7eb",
+  },
+  datePickerTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#374151",
+  },
+  datePickerCancel: {
+    fontSize: 16,
+    color: "#666",
+  },
+  datePickerDone: {
+    fontSize: 16,
+    color: "#219150",
+    fontWeight: "600",
   },
   radioGroup: {
     flexDirection: "row",

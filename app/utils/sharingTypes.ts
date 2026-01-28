@@ -1,6 +1,3 @@
-// app/utils/sharingTypes.ts
-
-// All possible sharing types (1-10)
 export const ALL_SHARING_TYPES = [
   'single',
   'double',

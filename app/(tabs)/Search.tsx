@@ -1,633 +1,671 @@
-// app/SearchPage.tsx
-import { useThemeContext } from "@/components/ui/ThemeContext";
-import { MaterialCommunityIcons as Icon } from "@expo/vector-icons";
-import { Ionicons } from "@expo/vector-icons";
-import * as Location from "expo-location";
-import React, { useEffect, useState } from "react";
+// app/(tabs)/Search.tsx - UPDATED WITH REAL SEARCH FUNCTIONALITY
+import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
+  Dimensions,
+  FlatList,
+  Image,
   SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
-  Dimensions,
-  FlatList,
-  Image,
-  ActivityIndicator,
-  Alert,
-} from "react-native";
-import { useRouter } from "expo-router";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useLocalSearchParams } from "expo-router";
-import HostelService, { Hostel } from "../api/HostelService";
+} from 'react-native';
+import Toast from 'react-native-toast-message';
+import HostelService from '../api/HostelService';
+import LocationService from '../api/LocationService';
 
-const { width } = Dimensions.get("window");
+const { width } = Dimensions.get('window');
 
-export default function SearchPage() {
-  const [keyword, setKeyword] = useState("");
-  const [hostels, setHostels] = useState<any[]>([]);
-  const [filterVisible, setFilterVisible] = useState(false);
-  const [loadingNearby, setLoadingNearby] = useState(false);
-  const [loadingSearch, setLoadingSearch] = useState(false);
-  const { isDark } = useThemeContext();
+export default function Search() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
-
-  const { query } = useLocalSearchParams(); 
+  const { query } = useLocalSearchParams();
+  
+  const [searchText, setSearchText] = useState(typeof query === 'string' ? query : '');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [recentSearches, setRecentSearches] = useState<string[]>([]);
 
   useEffect(() => {
-    if (query) {
-      setKeyword(query as string);
-      handleSearch(query as string);
+    if (searchText.trim().length > 0) {
+      performSearch(searchText);
     }
-  }, [query]);
+    loadRecentSearches();
+  }, []);
 
-  const theme = isDark
-    ? {
-        background: "#000000",
-        cardBackground: "#121212",
-        text: "#EEEEEE",
-        headerText: "#A5D6A7",
-        accent: "#4CAF50",
-        shadow: "#000000",
-        border: "#333333",
-        searchBackground: "#2c2c2c",
-      }
-    : {
-        background: "#FFFFFF",
-        cardBackground: "#F5F5F5",
-        text: "#222222",
-        headerText: "#1E3A1E",
-        accent: "#4CAF50",
-        shadow: "#CCCCCC",
-        border: "#E0E0E0",
-        searchBackground: "#fff",
-      };
-
-  const handleBack = () => {
+  const loadRecentSearches = async () => {
     try {
-      if (router.canGoBack()) {
-        router.back();
-      } else {
-        router.push("/");
-      }
-    } catch (err) {
-      console.error("Back navigation error:", err);
-      router.push("/");
+      // You can use AsyncStorage or Context for recent searches
+      const recent = ['Ameerpet', 'Kukatpally', 'Hitech City', 'Girls Hostel', 'Boys Hostel'];
+      setRecentSearches(recent);
+    } catch (error) {
+      console.error('Error loading recent searches:', error);
     }
   };
 
-  // Transform API hostel data to frontend format
-  const transformHostelData = (hostel: Hostel) => {
-    const primaryPhoto = hostel.photos?.find(photo => photo.isPrimary) || hostel.photos?.[0];
+  const performSearch = async (searchQuery: string) => {
+    if (!searchQuery.trim()) return;
     
-    // Convert photo URL to absolute URL
-    let imageUrl = null;
-    if (primaryPhoto?.url) {
-      if (primaryPhoto.url.startsWith('http')) {
-        imageUrl = primaryPhoto.url;
-      } else {
-        const normalizedUrl = primaryPhoto.url.startsWith('/')
-          ? primaryPhoto.url
-          : `/${primaryPhoto.url}`;
-        imageUrl = `https://api.fyndom.in${normalizedUrl}`;
-      }
-    }
-
-    // Calculate starting price from available room types
-    let startingPrice = hostel.startingPrice || 0;
-    if (startingPrice === 0 || startingPrice === null) {
-      const prices = [
-        hostel.pricing?.single?.monthly?.price,
-        hostel.pricing?.double?.monthly?.price,
-        hostel.pricing?.triple?.monthly?.price,
-        hostel.pricing?.four?.monthly?.price
-      ].filter(price => price !== null && price !== undefined && price > 0) as number[];
+    setLoading(true);
+    setError(null);
+    
+    try {
+      console.log(`🔍 Performing search for: ${searchQuery}`);
       
-      if (prices.length > 0) {
-        startingPrice = Math.min(...prices);
+      // Save to recent searches
+      if (!recentSearches.includes(searchQuery)) {
+        const updated = [searchQuery, ...recentSearches.slice(0, 4)];
+        setRecentSearches(updated);
       }
-    }
-
-    // Calculate rating based on facilities and availability
-    const baseRating = 3.5;
-    let ratingBonus = 0;
-
-    if (hostel.photos?.length > 0) ratingBonus += 0.3;
-    
-    const facilitiesCount = hostel.facilities?.essentials?.length || 0;
-    ratingBonus += Math.min(facilitiesCount * 0.1, 0.5);
-    
-    if (hostel.facilities?.essentials?.includes('Air Conditioning')) ratingBonus += 0.2;
-    if (hostel.facilities?.essentials?.includes('Free WiFi')) ratingBonus += 0.2;
-
-    const finalRating = Math.min(baseRating + ratingBonus + (Math.random() * 0.6), 5.0);
-
-    // Extract location from address
-    const extractLocationFromAddress = (address: string): string => {
-      if (!address) return 'Unknown Location';
-
-      const areas = [
-        'Kukatpally', 'L.B. Nagar', 'Secunderabad', 'Ameerpet',
-        'Hitech City', 'Madhapur', 'Begumpet', 'KPHB', 'Dilsukhnagar',
-        'Hyderabad', 'Bangalore', 'Karnataka', 'Telangana'
-      ];
-
-      for (const area of areas) {
-        if (address.toLowerCase().includes(area.toLowerCase())) {
-          return area;
+      
+      // First try area-based search
+      const areaResponse = await LocationService.searchHostelsByArea(searchQuery);
+      
+      if (areaResponse.success && areaResponse.data.length > 0) {
+        console.log(`✅ Found ${areaResponse.data.length} hostels in area: ${searchQuery}`);
+        
+        const hostelIds = areaResponse.data.map((result: any) => result.hostelId);
+        const detailedHostels = [];
+        
+        for (const hostelId of hostelIds) {
+          try {
+            const hostelDetail = await HostelService.getHostelById(hostelId);
+            if (hostelDetail.success && hostelDetail.data) {
+              detailedHostels.push({
+                ...hostelDetail.data,
+                searchType: 'area'
+              });
+            }
+          } catch (error) {
+            console.error(`Error fetching hostel ${hostelId}:`, error);
+          }
+        }
+        
+        if (detailedHostels.length > 0) {
+          setSearchResults(detailedHostels);
+          return;
         }
       }
-
-      const words = address.split(',').map(word => word.trim()).filter(word => word.length > 3);
-      return words[0] || 'Unknown Location';
-    };
-
-    // Determine gender from hostel data
-    const determineGenderFromHostel = (hostel: Hostel): string => {
-      const name = hostel.hostelName?.toLowerCase() || '';
-      const type = hostel.hostelType?.toLowerCase() || '';
-
-      if (name.includes('boys') || name.includes('boy') || type === 'boys') return 'Boys';
-      if (name.includes('girls') || name.includes('girl') || type === 'girls') return 'Girls';
-      if (name.includes('women') || name.includes('womens')) return 'Girls';
-      return 'Co-living';
-    };
-
-    return {
-      id: hostel._id,
-      name: hostel.hostelName || 'Unnamed Hostel',
-      address: hostel.address || 'Address not provided',
-      price: startingPrice > 0 ? `₹${startingPrice} / month` : 'Price not available',
-      location: extractLocationFromAddress(hostel.address),
-      rating: parseFloat(finalRating.toFixed(1)),
-      image: imageUrl,
-      facilities: hostel.facilities?.essentials || [],
-      gender: determineGenderFromHostel(hostel),
-      summary: hostel.summary || 'Comfortable accommodation with modern amenities.',
-      contact: hostel.contact || 'Not provided',
-      email: hostel.email || 'Not provided',
-      coordinates: hostel.coordinates,
-      allPhotos: hostel.photos || [],
-      allFacilities: hostel.facilities || {},
-      pricing: hostel.pricing || {},
-      availabilitySummary: hostel.availabilitySummary || {},
-      distance: hostel.distance,
-      isNearby: hostel.isNearby,
-      rawData: hostel
-    };
+      
+      // Fallback to general hostel search
+      console.log(`🔍 Searching in all hostels for: ${searchQuery}`);
+      const allHostels = await HostelService.getAllHostels();
+      
+      if (allHostels.success && allHostels.data) {
+        const filtered = allHostels.data.filter(hostel => {
+          const searchLower = searchQuery.toLowerCase();
+          return (
+            hostel.name?.toLowerCase().includes(searchLower) ||
+            hostel.location?.toLowerCase().includes(searchLower) ||
+            hostel.address?.toLowerCase().includes(searchLower) ||
+            hostel.city?.toLowerCase().includes(searchLower) ||
+            hostel.hostelType?.toLowerCase().includes(searchLower) ||
+            hostel.gender?.toLowerCase().includes(searchLower)
+          );
+        });
+        
+        console.log(`✅ Found ${filtered.length} hostels matching: ${searchQuery}`);
+        setSearchResults(filtered);
+      } else {
+        setSearchResults([]);
+      }
+      
+    } catch (err: any) {
+      console.error('Search error:', err);
+      setError('Failed to perform search. Please try again.');
+      Toast.show({
+        type: 'error',
+        text1: 'Search Error',
+        text2: 'Failed to perform search'
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleSearch = async (searchText?: string) => {
-    const searchQuery = searchText || keyword;
-    
-    if (!searchQuery.trim()) {
-      Alert.alert("Please enter search text");
+  const handleSearch = () => {
+    if (searchText.trim().length === 0) {
+      Toast.show({
+        type: 'info',
+        text1: 'Empty Search',
+        text2: 'Please enter a search term'
+      });
       return;
     }
-
-    setLoadingSearch(true);
-    try {
-      const response = await HostelService.searchHostels(searchQuery);
-      
-      if (response.success) {
-        const transformedHostels = response.data.map(hostel => transformHostelData(hostel));
-        setHostels(transformedHostels);
-      } else {
-        Alert.alert("Search Failed", response.message || "No hostels found");
-        setHostels([]);
-      }
-    } catch (error: any) {
-      console.error("Search error:", error);
-      Alert.alert("Error", "Failed to search hostels. Please try again.");
-      setHostels([]);
-    } finally {
-      setLoadingSearch(false);
-    }
+    
+    performSearch(searchText);
   };
 
-  const fetchNearbyHostels = async () => {
-    setLoadingNearby(true);
-    try {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      
-      if (status !== "granted") {
-        Alert.alert("Location Permission Denied", "Please enable location services to find nearby hostels.");
-        setLoadingNearby(false);
-        return;
-      }
-
-      let location = await Location.getCurrentPositionAsync({});
-      const { latitude, longitude } = location.coords;
-
-      // Try multiple search distances
-      const searchDistances = [10, 20, 50];
-      let nearbyHostels: Hostel[] = [];
-      
-      for (const distance of searchDistances) {
-        try {
-          const response = await HostelService.getNearbyHostels(latitude, longitude, distance);
-          
-          if (response.success && response.data && response.data.length > 0) {
-            nearbyHostels = response.data;
-            break;
-          }
-        } catch (error) {
-          console.error(`Error with ${distance}km search:`, error);
-        }
-      }
-
-      if (nearbyHostels.length > 0) {
-        const transformedHostels = nearbyHostels.map(hostel => transformHostelData(hostel));
-        setHostels(transformedHostels);
-      } else {
-        // Fallback to area-based search
-        try {
-          const address = await Location.reverseGeocodeAsync({ latitude, longitude });
-          if (address && address.length > 0) {
-            const area = address[0].district || address[0].subregion || address[0].city;
-            if (area) {
-              const response = await HostelService.searchHostels(area);
-              if (response.success && response.data.length > 0) {
-                const transformedHostels = response.data.map(hostel => transformHostelData(hostel));
-                setHostels(transformedHostels);
-                Alert.alert("Area Search", `Found ${transformedHostels.length} hostels in ${area}`);
-                return;
-              }
-            }
-          }
-        } catch (areaError) {
-          console.error('Area search error:', areaError);
-        }
-        
-        Alert.alert(
-          "No Nearby Hostels", 
-          "No hostels found in your area. Try searching with specific area names like 'KPHB', 'Hitech City', etc."
-        );
-        setHostels([]);
-      }
-    } catch (error: any) {
-      console.error("Nearby search error:", error);
-      Alert.alert(
-        "Error", 
-        `Failed to find nearby hostels: ${error.response?.data?.message || error.message}`
-      );
-      setHostels([]);
-    } finally {
-      setLoadingNearby(false);
-    }
+  const handleRecentSearch = (searchTerm: string) => {
+    setSearchText(searchTerm);
+    performSearch(searchTerm);
   };
 
-  const renderHostel = ({ item }: any) => (
-    <TouchableOpacity
-      style={[
-        styles.hostelCard,
-        {
-          backgroundColor: theme.cardBackground,
-          shadowColor: theme.shadow,
-          borderColor: theme.border,
-        },
-      ]}
-      activeOpacity={0.8}
-      onPress={() => router.push({ 
-        pathname: "/HostelDetails", 
-        params: { hostel: JSON.stringify(item) } 
-      })}
-    >
-      {item.image ? (
-        <Image source={{ uri: item.image }} style={styles.hostelImage} resizeMode="cover" />
-      ) : (
-        <View style={[styles.hostelImage, { backgroundColor: '#e0e0e0', justifyContent: 'center', alignItems: 'center' }]}>
-          <Ionicons name="home-outline" size={40} color="#999" />
-        </View>
-      )}
-      <View style={{ padding: 12 }}>
-        <Text style={[styles.hostelName, { color: theme.headerText }]} numberOfLines={1}>{item.name}</Text>
-        <Text style={[styles.hostelArea, { color: theme.text }]} numberOfLines={1}>{item.location}</Text>
-        <Text style={[styles.hostelPrice, { color: theme.accent }]}>{item.price}</Text>
-        <Text style={[styles.hostelRating, { color: theme.text }]}>⭐ {item.rating}</Text>
-        
-        {item.distance !== undefined && (
-          <Text style={[styles.hostelDistance, { color: theme.text }]}>
-            📍 {item.distance.toFixed(1)} km away
-          </Text>
+  const handleHostelPress = (hostel: any) => {
+    router.push({
+      pathname: "/HostelDetails",
+      params: {
+        hostel: JSON.stringify({
+          ...hostel,
+          hostelOwnerId: hostel.hostelOwnerId || hostel.id || hostel._id,
+          hostelId: hostel.id || hostel._id
+        })
+      }
+    });
+  };
+
+  const clearSearch = () => {
+    setSearchText('');
+    setSearchResults([]);
+  };
+
+  const renderHostelCard = ({ item }: { item: any }) => (
+    <TouchableOpacity style={styles.hostelCard} onPress={() => handleHostelPress(item)}>
+      <View style={styles.hostelImageContainer}>
+        {item.image || item.photos?.[0]?.url ? (
+          <Image 
+            source={{ uri: item.image || item.photos?.[0]?.url }} 
+            style={styles.hostelImage} 
+          />
+        ) : (
+          <View style={styles.noImageContainer}>
+            <Ionicons name="home-outline" size={40} color="#ccc" />
+          </View>
         )}
-
-        <View style={styles.availabilityRow}>
-          {item.availabilitySummary?.single?.availableBeds > 0 && (
-            <Text style={[styles.availabilityText, { color: theme.accent }]}>
-              1-share: {item.availabilitySummary.single.availableBeds}
-            </Text>
-          )}
-          {item.availabilitySummary?.double?.availableBeds > 0 && (
-            <Text style={[styles.availabilityText, { color: theme.accent }]}>
-              2-share: {item.availabilitySummary.double.availableBeds}
-            </Text>
-          )}
-          {item.availabilitySummary?.triple?.availableBeds > 0 && (
-            <Text style={[styles.availabilityText, { color: theme.accent }]}>
-              3-share: {item.availabilitySummary.triple.availableBeds}
-            </Text>
-          )}
-          {item.availabilitySummary?.four?.availableBeds > 0 && (
-            <Text style={[styles.availabilityText, { color: theme.accent }]}>
-              4-share: {item.availabilitySummary.four.availableBeds}
-            </Text>
+      </View>
+      
+      <View style={styles.hostelInfo}>
+        <Text style={styles.hostelName} numberOfLines={1}>
+          {item.name || 'Unnamed Hostel'}
+        </Text>
+        <Text style={styles.hostelLocation} numberOfLines={1}>
+          <Ionicons name="location-outline" size={12} color="#666" /> 
+          {item.location || item.address || item.city || 'Location not specified'}
+        </Text>
+        
+        <View style={styles.hostelDetails}>
+          <View style={styles.detailRow}>
+            <Text style={styles.hostelPrice}>₹{item.startingPrice || item.price || '0'}</Text>
+            <Text style={styles.pricePeriod}>/month</Text>
+          </View>
+          
+          <View style={styles.ratingContainer}>
+            <Ionicons name="star" size={12} color="#FFD700" />
+            <Text style={styles.ratingText}>{item.rating?.toFixed(1) || '4.0'}</Text>
+          </View>
+        </View>
+        
+        <View style={styles.facilitiesRow}>
+          {item.facilities?.slice(0, 2).map((facility: string, index: number) => (
+            <View key={index} style={styles.facilityTag}>
+              <Text style={styles.facilityText}>{facility}</Text>
+            </View>
+          ))}
+          {item.facilities?.length > 2 && (
+            <Text style={styles.moreFacilities}>+{item.facilities.length - 2} more</Text>
           )}
         </View>
-
-        <TouchableOpacity
-          style={[styles.viewBtn, { backgroundColor: theme.accent }]}
-          onPress={() => router.push({ 
-            pathname: "/HostelDetails", 
-            params: { hostel: JSON.stringify(item) } 
-          })}
-        >
-          <Text style={styles.viewBtnText}>View Details</Text>
-        </TouchableOpacity>
+        
+        <View style={styles.typeRow}>
+          <Text style={[
+            styles.hostelType,
+            { backgroundColor: item.gender === 'Girls' || item.hostelType === 'girls' ? '#FFE4E8' : 
+                         item.gender === 'Boys' || item.hostelType === 'boys' ? '#E3F2FD' : '#F0F8E7' }
+          ]}>
+            {item.gender || item.hostelType || 'Co-living'}
+          </Text>
+          
+          {item.searchType === 'area' && (
+            <View style={styles.areaBadge}>
+              <Ionicons name="location" size={10} color="#fff" />
+              <Text style={styles.areaBadgeText}>Area Match</Text>
+            </View>
+          )}
+        </View>
       </View>
     </TouchableOpacity>
   );
 
-  const showCenteredSearchIcon = hostels.length === 0 && !loadingNearby && !loadingSearch;
-  const showLoading = loadingNearby || loadingSearch;
+  const renderRecentSearchItem = ({ item }: { item: string }) => (
+    <TouchableOpacity 
+      style={styles.recentSearchItem} 
+      onPress={() => handleRecentSearch(item)}
+    >
+      <Ionicons name="time-outline" size={16} color="#666" />
+      <Text style={styles.recentSearchText}>{item}</Text>
+      <Ionicons name="arrow-forward" size={16} color="#4CBB17" />
+    </TouchableOpacity>
+  );
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
-      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={handleBack}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="arrow-back" size={26} color={theme.headerText} />
-        </TouchableOpacity>
-
-        <Text
-          style={[
-            styles.heading,
-            {
-              color: theme.headerText,
-              position: "absolute",
-              left: 0,
-              right: 0,
-              textAlign: "center",
-              top: 50,
-              fontSize: 20,
-            },
-          ]}
-        >
-          🔍 Search Hostels
-        </Text>
-      </View>
-
-      <View style={{ flex: 1, paddingHorizontal: 16 }}>
-        <View style={[styles.searchBox, { 
-          borderColor: theme.accent, 
-          backgroundColor: theme.searchBackground 
-        }]}>
-          <Icon name="magnify" size={20} color={theme.accent} style={{ marginRight: 6 }} />
+    <SafeAreaView style={styles.container}>
+      <View style={styles.header}>
+        <View style={styles.searchContainer}>
+          <Ionicons name="search-outline" size={20} color="#666" />
           <TextInput
-            placeholder="Search hostels, areas, etc."
-            placeholderTextColor={isDark ? "#aaa" : "#888"}
-            style={[styles.searchInput, { color: theme.text }]}
-            value={keyword}
-            onChangeText={setKeyword}
-            onSubmitEditing={() => handleSearch()}
+            value={searchText}
+            onChangeText={setSearchText}
+            placeholder="Search hostels, areas, cities..."
+            style={styles.searchInput}
+            autoFocus
             returnKeyType="search"
+            onSubmitEditing={handleSearch}
           />
-          <TouchableOpacity onPress={() => setFilterVisible(true)} style={{ paddingHorizontal: 8 }}>
-            <Icon name="filter-variant" size={24} color={theme.accent} />
+          {searchText.length > 0 && (
+            <TouchableOpacity onPress={clearSearch} style={styles.clearButton}>
+              <Ionicons name="close-circle" size={20} color="#999" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity onPress={handleSearch} style={styles.searchButton}>
+            <Ionicons name="arrow-forward" size={20} color="#fff" />
           </TouchableOpacity>
         </View>
+      </View>
 
-        <TouchableOpacity
-          style={[styles.nearbyBtn, loadingNearby && styles.nearbyBtnDisabled]}
-          onPress={fetchNearbyHostels}
-          accessibilityLabel="Detect nearby hostels"
-          disabled={loadingNearby}
-        >
-          {loadingNearby ? (
-            <ActivityIndicator size="small" color={theme.accent} />
-          ) : (
-            <Icon name="crosshairs-gps" size={28} color={theme.accent} />
-          )}
-          <Text style={[styles.nearbyText, { color: theme.text }]}>
-            {loadingNearby ? "Searching..." : "Nearby Hostels"}
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#4CBB17" />
+          <Text style={styles.loadingText}>Searching for "{searchText}"...</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.errorContainer}>
+          <Ionicons name="warning-outline" size={64} color="#ff6b6b" />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => performSearch(searchText)}>
+            <Text style={styles.retryButtonText}>Retry Search</Text>
+          </TouchableOpacity>
+        </View>
+      ) : searchResults.length === 0 && searchText ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="search-outline" size={64} color="#ccc" />
+          <Text style={styles.emptyTitle}>No results found</Text>
+          <Text style={styles.emptyText}>
+            No hostels found for "{searchText}"
           </Text>
-        </TouchableOpacity>
-
-        {showLoading && (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={theme.accent} />
-            <Text style={[styles.loadingText, { color: theme.text }]}>
-              {loadingNearby ? "Finding nearby hostels..." : "Searching hostels..."}
-            </Text>
-          </View>
-        )}
-
-        {showCenteredSearchIcon && (
-          <View style={styles.centeredSearchIconContainer}>
-            <Icon name="magnify" size={100} color={theme.accent} />
-            <Text style={[styles.centeredText, { color: theme.text }]}>
-              Search for hostels or tap the nearby button
-            </Text>
-          </View>
-        )}
-
-        {hostels.length > 0 && (
+          <Text style={styles.emptySuggestion}>
+            Try searching for areas like "Ameerpet", "Kukatpally" or hostel types like "Boys Hostel"
+          </Text>
+          <TouchableOpacity style={styles.browseButton} onPress={() => router.push('/(tabs)/Home')}>
+            <Text style={styles.browseButtonText}>Browse All Hostels</Text>
+          </TouchableOpacity>
+        </View>
+      ) : searchResults.length > 0 ? (
+        <>
           <View style={styles.resultsHeader}>
-            <Text style={[styles.resultsText, { color: theme.text }]}>
-              Found {hostels.length} hostels
+            <Text style={styles.resultsTitle}>
+              Search Results
+            </Text>
+            <Text style={styles.resultsCount}>
+              {searchResults.length} {searchResults.length === 1 ? 'hostel' : 'hostels'} found
             </Text>
           </View>
-        )}
-
-        {hostels.length > 0 && (
+          
           <FlatList
-            data={hostels}
-            keyExtractor={(item) => item.id}
-            renderItem={renderHostel}
-            numColumns={2}
-            columnWrapperStyle={styles.columnWrapper}
-            contentContainerStyle={styles.listContainer}
+            data={searchResults}
+            renderItem={renderHostelCard}
+            keyExtractor={(item) => `search-${item.id || item._id || Math.random()}`}
+            contentContainerStyle={styles.resultsList}
             showsVerticalScrollIndicator={false}
           />
-        )}
-
-        {hostels.length === 0 && !showLoading && !showCenteredSearchIcon && (
-          <View style={styles.noResultsContainer}>
-            <Icon name="emoticon-sad-outline" size={80} color={theme.accent} />
-            <Text style={[styles.noResultsText, { color: theme.text }]}>
-              No hostels found
-            </Text>
-            <Text style={[styles.noResultsSubText, { color: theme.text }]}>
-              Try different search terms or use nearby search
-            </Text>
+        </>
+      ) : (
+        // Show recent searches when no search has been performed
+        <View style={styles.recentSearchesContainer}>
+          <Text style={styles.recentSearchesTitle}>Recent Searches</Text>
+          
+          {recentSearches.length > 0 ? (
+            <FlatList
+              data={recentSearches}
+              renderItem={renderRecentSearchItem}
+              keyExtractor={(item, index) => `recent-${index}`}
+              contentContainerStyle={styles.recentSearchesList}
+            />
+          ) : (
+            <View style={styles.noRecentSearches}>
+              <Ionicons name="search-outline" size={48} color="#ccc" />
+              <Text style={styles.noRecentSearchesText}>No recent searches</Text>
+            </View>
+          )}
+          
+          <Text style={styles.popularSearchesTitle}>Popular Areas</Text>
+          <View style={styles.popularAreasContainer}>
+            {['Ameerpet', 'Kukatpally', 'Hitech City', 'Dilsukhnagar', 'Madhapur'].map((area) => (
+              <TouchableOpacity 
+                key={area} 
+                style={styles.areaTag}
+                onPress={() => handleRecentSearch(area)}
+              >
+                <Ionicons name="location-outline" size={14} color="#4CBB17" />
+                <Text style={styles.areaTagText}>{area}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
-        )}
-      </View>
+        </View>
+      )}
+      
+      <Toast />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
   header: {
-    flexDirection: "row",
-    alignItems: "center",
     paddingHorizontal: 16,
-    marginBottom: 10,
-    height: 80,
-  },
-  backButton: {
-    paddingRight: 12,
-    zIndex: 10,
-  },
-  heading: {
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  searchBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: 16,
-    paddingHorizontal: 12,
     paddingVertical: 12,
-    borderWidth: 1,
-    marginBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
   searchInput: {
     flex: 1,
-    fontSize: 14,
-  },
-  nearbyBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "transparent",
-    alignSelf: "flex-start",
-    padding: 8,
-    borderRadius: 8,
-    marginBottom: 16,
-  },
-  nearbyBtnDisabled: {
-    opacity: 0.6,
-  },
-  nearbyText: {
     marginLeft: 8,
-    fontSize: 14,
-    fontWeight: "500",
+    fontSize: 16,
+    color: '#333',
+  },
+  clearButton: {
+    padding: 4,
+    marginHorizontal: 4,
+  },
+  searchButton: {
+    backgroundColor: '#4CBB17',
+    borderRadius: 6,
+    padding: 6,
+    marginLeft: 4,
   },
   loadingContainer: {
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 20,
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   loadingText: {
     marginTop: 12,
     fontSize: 16,
-    textAlign: "center",
+    color: '#666',
   },
-  centeredSearchIconContainer: {
+  errorContainer: {
     flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingBottom: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
   },
-  centeredText: {
-    marginTop: 16,
+  errorText: {
     fontSize: 16,
-    textAlign: "center",
+    color: '#ff6b6b',
+    textAlign: 'center',
+    marginVertical: 16,
+  },
+  retryButton: {
+    backgroundColor: '#4CBB17',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#333',
+    marginTop: 16,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  emptySuggestion: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    marginTop: 8,
+    marginBottom: 24,
     paddingHorizontal: 20,
   },
-  resultsHeader: {
-    marginBottom: 16,
+  browseButton: {
+    backgroundColor: '#4CBB17',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
   },
-  resultsText: {
+  browseButtonText: {
+    color: '#fff',
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: '600',
   },
-  listContainer: {
-    paddingBottom: 120,
+  resultsHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
   },
-  columnWrapper: {
-    justifyContent: "space-between",
-    marginBottom: 16,
+  resultsTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  resultsCount: {
+    fontSize: 14,
+    color: '#666',
+    marginTop: 4,
+  },
+  resultsList: {
+    padding: 16,
   },
   hostelCard: {
-    borderRadius: 16,
-    width: (width - 48) / 2,
-    overflow: "hidden",
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 3,
-    borderWidth: 1,
-  },
-  hostelImage: { 
-    width: "100%", 
-    height: 100, 
-  },
-  hostelName: { 
-    fontSize: 14, 
-    fontWeight: "600", 
-    marginBottom: 2 
-  },
-  hostelArea: { 
-    fontSize: 12, 
-    marginBottom: 4,
-    opacity: 0.8 
-  },
-  hostelPrice: { 
-    fontSize: 12, 
-    fontWeight: "600",
-    marginBottom: 2 
-  },
-  hostelRating: { 
-    fontSize: 12, 
-    marginBottom: 4 
-  },
-  hostelDistance: {
-    fontSize: 11,
-    marginBottom: 4,
-    opacity: 0.8,
-  },
-  availabilityRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  hostelImageContainer: {
+    width: 100,
+    height: 120,
+  },
+  hostelImage: {
+    width: '100%',
+    height: '100%',
+  },
+  noImageContainer: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#f5f5f5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  hostelInfo: {
+    flex: 1,
+    padding: 12,
+  },
+  hostelName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  hostelLocation: {
+    fontSize: 12,
+    color: '#666',
     marginBottom: 8,
   },
-  availabilityText: {
-    fontSize: 10,
-    marginRight: 8,
-    marginBottom: 2,
+  hostelDetails: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
   },
-  viewBtn: { 
-    paddingVertical: 6, 
-    borderRadius: 8, 
-    alignItems: "center" 
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
   },
-  viewBtnText: { 
-    color: "#fff", 
-    fontWeight: "600", 
-    fontSize: 12 
-  },
-  noResultsContainer: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingBottom: 80,
-  },
-  noResultsText: {
-    marginTop: 16,
+  hostelPrice: {
     fontSize: 18,
-    fontWeight: "600",
-    textAlign: "center",
+    fontWeight: '700',
+    color: '#4CBB17',
   },
-  noResultsSubText: {
-    marginTop: 8,
+  pricePeriod: {
+    fontSize: 12,
+    color: '#666',
+    marginLeft: 2,
+  },
+  ratingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF8E1',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  ratingText: {
+    fontSize: 12,
+    color: '#FF8F00',
+    fontWeight: '600',
+    marginLeft: 2,
+  },
+  facilitiesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  facilityTag: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginRight: 4,
+    marginBottom: 4,
+  },
+  facilityText: {
+    fontSize: 10,
+    color: '#4CBB17',
+    fontWeight: '500',
+  },
+  moreFacilities: {
+    fontSize: 10,
+    color: '#666',
+  },
+  typeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  hostelType: {
+    fontSize: 11,
+    color: '#333',
+    fontWeight: '600',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  areaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#4CBB17',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  areaBadgeText: {
+    fontSize: 10,
+    color: '#fff',
+    fontWeight: '600',
+    marginLeft: 2,
+  },
+  recentSearchesContainer: {
+    flex: 1,
+    padding: 16,
+  },
+  recentSearchesTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 16,
+  },
+  recentSearchesList: {
+    paddingBottom: 16,
+  },
+  recentSearchItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  recentSearchText: {
+    flex: 1,
+    fontSize: 16,
+    color: '#333',
+    marginLeft: 12,
+  },
+  noRecentSearches: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 40,
+  },
+  noRecentSearchesText: {
+    fontSize: 16,
+    color: '#999',
+    marginTop: 12,
+  },
+  popularSearchesTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    marginTop: 16,
+    marginBottom: 12,
+  },
+  popularAreasContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  areaTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0F8E7',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#4CBB17',
+  },
+  areaTagText: {
     fontSize: 14,
-    textAlign: "center",
-    opacity: 0.7,
+    color: '#4CBB17',
+    fontWeight: '600',
+    marginLeft: 4,
   },
 });

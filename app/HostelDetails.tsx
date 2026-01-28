@@ -1,3 +1,4 @@
+// app/HostelDetails.tsx - COMPLETE FILE WITH COORDINATE FIXES
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -13,18 +14,21 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  RefreshControl
+  RefreshControl,
+  Alert
 } from 'react-native';
 import Toast from 'react-native-toast-message';
-// import MapViewWrapper from '../components/MapViewWrapper';
+import MapViewWrapper from '../components/MapViewWrapper';
 import { useDispatch, useSelector } from 'react-redux';
 import { AppDispatch, RootState } from '../app/reduxStore/store/store';
 import { getStartingPrice, getHostelFacilities, getHostelRooms } from '../app/reduxStore/reduxSlices/hostelSlice';
-import PricingService, { CombinedPricingData } from '../app/api/PricingService';
+import PricingService from '../app/api/PricingService';
+import HostelFacilitiesService from '../app/api/HostelFacilitiesService';
+import RoomService from '../app/api/RoomService';
+import LocationService from '../app/api/LocationService';
 
 const { width } = Dimensions.get('window');
 
-// Define a type for the pricing keys
 type SharingType = 'single' | 'double' | 'triple' | 'four' | 'five' | 'six' | 'seven' | 'eight' | 'nine' | 'ten';
 
 const ALL_SHARING_TYPES: SharingType[] = ['single', 'double', 'triple', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
@@ -66,7 +70,7 @@ interface HostelData {
     foodServices: string[];
     customFoodMenu?: string;
   };
-  coordinates: {
+  coordinates?: {
     latitude: number;
     longitude: number;
   };
@@ -75,6 +79,65 @@ interface HostelData {
   sharingOptions: any[];
   allPhotos: any[];
   hostelOwnerId?: string;
+  hostelId?: string;
+  _id?: string;
+  city?: string;
+  state?: string;
+  landmark?: string;
+  location?: string;
+}
+
+interface RoomAvailability {
+  sharingType: string;
+  availableBeds: number;
+  totalBeds: number;
+  availableRooms: number;
+  totalRooms: number;
+  rooms: any[];
+}
+
+interface PricingData {
+  [key: string]: {
+    daily: number | null;
+    monthly: number | null;
+  };
+}
+
+interface CombinedPricingData {
+  [key: string]: {
+    daily: { price: number; currency: string } | null;
+    monthly: { price: number; currency: string } | null;
+    availableBeds: number;
+    isAvailable: boolean;
+    displayName: string;
+  };
+}
+
+interface MapHostel {
+  hostelId: string;
+  hostelName: string;
+  city: string;
+  state: string;
+  landmark: string;
+  coordinates: {
+    latitude: number;
+    longitude: number;
+  };
+}
+
+interface HostelLocationData {
+  hostelId: string;
+  hostelName: string;
+  location: {
+    coordinates: {
+      latitude: number;
+      longitude: number;
+    };
+    formattedAddress: string;
+    city: string;
+    state: string;
+    landmark: string;
+  };
 }
 
 export default function HostelDetails() {
@@ -88,11 +151,11 @@ export default function HostelDetails() {
   const hostelRooms = useSelector((state: RootState) => state.hostel.hostelRooms);
   const roomsLoading = useSelector((state: RootState) => state.hostel.roomsLoading);
 
-  let hostelData: HostelData | null = null;
+  let initialHostelData: HostelData | null = null;
 
   try {
     if (hostel && typeof hostel === 'string') {
-      hostelData = JSON.parse(hostel);
+      initialHostelData = JSON.parse(hostel);
     }
   } catch (error) {
     console.error("Failed to parse hostel data:", error);
@@ -116,173 +179,117 @@ export default function HostelDetails() {
   const [priceFetchAttempted, setPriceFetchAttempted] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // New state for API data
   const [facilitiesData, setFacilitiesData] = useState<any>(null);
-  const [availableSharingTypes, setAvailableSharingTypes] = useState<Array<{ type: string; display: string; availableBeds: number }>>([]);
+  const [availableSharingTypes, setAvailableSharingTypes] = useState<RoomAvailability[]>([]);
+  const [roomAvailabilityByType, setRoomAvailabilityByType] = useState<Record<string, RoomAvailability>>({});
 
-  // Pricing API state
   const [pricingData, setPricingData] = useState<CombinedPricingData | null>(null);
+  const [apiPricingData, setApiPricingData] = useState<PricingData | null>(null);
   const [loadingPricing, setLoadingPricing] = useState(false);
   const [calculatedStartingPrice, setCalculatedStartingPrice] = useState<number>(0);
+  const [facilitiesLoading, setFacilitiesLoading] = useState(false);
+  const [roomsData, setRoomsData] = useState<any>(null);
+  const [allMapHostels, setAllMapHostels] = useState<MapHostel[]>([]);
+  const [mapLoading, setMapLoading] = useState(false);
+  
+  const [hostelData, setHostelData] = useState<HostelData | null>(initialHostelData);
+  const [hostelLocationData, setHostelLocationData] = useState<HostelLocationData | null>(null);
+  const [locationLoading, setLocationLoading] = useState(false);
 
   const photos = hostelData?.photos || hostelData?.allPhotos || [];
 
-  // Fetch hostel data from APIs
   useEffect(() => {
-    if (hostelData?.id) {
-      fetchHostelData();
+    if (hostelData?.hostelId || hostelData?.id || hostelData?._id) {
+      fetchAllHostelData();
+      fetchHostelLocation();
+      fetchAllMapHostels();
     }
-  }, [hostelData?.id]);
+  }, [hostelData?.hostelId, hostelData?.id, hostelData?._id]);
 
-  // Fetch pricing data from API
-  const fetchPricingData = async () => {
+  const fetchHostelLocation = async () => {
     if (!hostelData) return;
 
+    const hostelId = hostelData.hostelId || hostelData.id || hostelData._id;
+    
+    if (!hostelId) {
+      console.error('No hostel ID available for location');
+      return;
+    }
+
     try {
-      setLoadingPricing(true);
-
-      // Use hostelOwnerId if available, otherwise use hostel id
-      const ownerId = hostelData.hostelOwnerId || hostelData.id;
-
-      const response = await PricingService.getHostelPricing(ownerId);
-      console.log('Pricing API response:', response);
-
-      if (response.success && response.data && Array.isArray(response.data)) {
-        const combinedPricing = PricingService.combinePricingData(response.data);
-        console.log('Combined pricing:', combinedPricing);
-        setPricingData(combinedPricing);
-
-        // Calculate starting price from pricing data
-        const startPrice = PricingService.calculateStartingPrice(combinedPricing);
-        setCalculatedStartingPrice(startPrice);
-        console.log('Calculated starting price:', startPrice);
-
+      setLocationLoading(true);
+      console.log(`📍 Fetching location for hostel: ${hostelId}`);
+      
+      const response = await LocationService.getHostelLocation(hostelId);
+      
+      if (response.success && response.data) {
+        console.log('✅ Hostel location data fetched:', response.data);
+        
+        setHostelLocationData(response.data);
+        
+        if (response.data.location?.coordinates) {
+          const updatedHostelData = {
+            ...hostelData,
+            coordinates: response.data.location.coordinates,
+            address: response.data.location.formattedAddress || hostelData.address,
+            city: response.data.location.city || hostelData.city,
+            state: response.data.location.state || hostelData.state,
+            landmark: response.data.location.landmark || hostelData.landmark
+          };
+          
+          setHostelData(updatedHostelData);
+          console.log('✅ Updated hostel data with coordinates:', updatedHostelData.coordinates);
+        }
       } else {
-        console.warn('No valid pricing data received, using fallback');
-        setFallbackPricing();
+        console.warn('⚠️ No location data in response, using default coordinates');
+        const updatedHostelData = {
+          ...hostelData,
+          coordinates: hostelData.coordinates || { latitude: 17.385044, longitude: 78.486671 },
+          city: hostelData.city || 'Hyderabad',
+          state: hostelData.state || 'Telangana'
+        };
+        setHostelData(updatedHostelData);
       }
-    } catch (error: any) {
-      console.error('Error fetching pricing data:', error);
+      
+    } catch (error) {
+      console.error('❌ Error fetching hostel location:', error);
       Toast.show({
         type: 'error',
-        text1: 'Info',
-        text2: 'Using default pricing information'
+        text1: 'Location Error',
+        text2: 'Failed to fetch hostel location'
       });
-      setFallbackPricing();
+      
+      if (hostelData) {
+        const updatedHostelData = {
+          ...hostelData,
+          coordinates: hostelData.coordinates || { latitude: 17.385044, longitude: 78.486671 }
+        };
+        setHostelData(updatedHostelData);
+      }
     } finally {
-      setLoadingPricing(false);
+      setLocationLoading(false);
     }
   };
 
-  // Set fallback pricing from hostel data
-  const setFallbackPricing = () => {
-    const fallbackPricing: CombinedPricingData = {};
-
-    ALL_SHARING_TYPES.forEach(type => {
-      const hostelPricing = hostelData?.pricing?.[type];
-      const hasPricing = hostelPricing?.monthly || hostelPricing?.daily;
-
-      fallbackPricing[type] = {
-        daily: hostelPricing?.daily || null,
-        monthly: hostelPricing?.monthly || null,
-        availableBeds: 0,
-        isAvailable: !!hasPricing,
-        displayName: SHARING_LABELS[type]
-      };
-    });
-
-    setPricingData(fallbackPricing);
-    
-    // Calculate fallback starting price
-    const startPrice = PricingService.calculateStartingPrice(fallbackPricing);
-    setCalculatedStartingPrice(startPrice || 8000);
-  };
-
-  // Fetch all hostel data
-  const fetchHostelData = async () => {
-    if (!hostelData?.id) return;
+  const fetchAllHostelData = async () => {
+    if (!hostelData) return;
 
     setIsLoading(true);
     setRefreshing(true);
 
     try {
-      // Fetch pricing data FIRST
+      console.log('🔄 Starting to fetch all hostel data...');
+
+      await fetchFacilitiesData();
       await fetchPricingData();
-
-      // Fetch rooms data (public API - no auth needed)
-      dispatch(getHostelRooms(hostelData.id))
-        .unwrap()
-        .then((response) => {
-          console.log('Rooms data loaded successfully');
-          
-          // Update available sharing types from rooms data
-          if (response.data?.sharingTypeAvailability) {
-            const availableTypes: Array<{ type: string; display: string; availableBeds: number }> = [];
-            
-            ALL_SHARING_TYPES.forEach(sharingType => {
-              const availability = response.data.sharingTypeAvailability[sharingType];
-              if (availability?.available && availability.availableBeds > 0) {
-                availableTypes.push({
-                  type: sharingType,
-                  display: SHARING_LABELS[sharingType],
-                  availableBeds: availability.availableBeds
-                });
-              }
-            });
-            
-            setAvailableSharingTypes(availableTypes);
-          }
-        })
-        .catch((error) => {
-          console.error('Failed to fetch rooms:', error);
-          Toast.show({
-            type: 'error',
-            text1: 'Warning',
-            text2: 'Could not load room availability'
-          });
-        });
-
-      // Fetch facilities data
-      if (!hostelFacilities) {
-        dispatch(getHostelFacilities(hostelData.id))
-          .unwrap()
-          .then((response) => {
-            setFacilitiesData(response.data);
-          })
-          .catch((error) => {
-            console.error("Failed to fetch facilities:", error);
-            // Set mock facilities data if API fails
-            setFacilitiesData({
-              sharingTypes: ["1 Sharing", "2 Sharing", "3 Sharing", "4 Sharing"],
-              bathroomTypes: ["Attached Bathroom", "Common Bathroom"],
-              essentials: ["Air Conditioning", "Free WiFi", "Power Backup"],
-              foodServices: ["Vegetarian Meals", "Breakfast", "Lunch", "Dinner"]
-            });
-          });
-      } else {
-        setFacilitiesData(hostelFacilities);
-      }
-
-      // Fetch starting price (optional, we already have calculated from pricing API)
-      if (!priceFetchAttempted) {
-        dispatch(getStartingPrice(hostelData.id))
-          .unwrap()
-          .then((response) => {
-            console.log('Starting price API success:', response);
-            setPriceFetchAttempted(true);
-          })
-          .catch((error) => {
-            console.error('Failed to fetch starting price:', error);
-            setPriceFetchAttempted(true);
-          });
-      }
+      await fetchRoomsData();
 
     } catch (error) {
       console.error("Error fetching hostel data:", error);
       Toast.show({
         type: 'error',
         text1: 'Error',
-        text2: 'Failed to load some hostel data, showing available information'
+        text2: 'Failed to load some hostel data'
       });
     } finally {
       setIsLoading(false);
@@ -290,10 +297,258 @@ export default function HostelDetails() {
     }
   };
 
-  // Handle pull to refresh
+  const fetchFacilitiesData = async () => {
+    if (!hostelData) return;
+
+    setFacilitiesLoading(true);
+
+    const hostelId = hostelData.hostelOwnerId || hostelData.hostelId || hostelData.id || hostelData._id;
+
+    if (!hostelId) {
+      console.error('No hostel ID available');
+      setFacilitiesLoading(false);
+      return;
+    }
+
+    try {
+      console.log(`🔄 Fetching facilities for hostel ID: ${hostelId}`);
+
+      const response = await HostelFacilitiesService.getFacilities(hostelId);
+
+      if (response.success && response.data) {
+        const transformedFacilities = HostelFacilitiesService.transformFacilitiesData(response.data);
+        setFacilitiesData(transformedFacilities);
+
+        console.log('✅ Facilities data loaded from API:', {
+          sharingTypes: transformedFacilities.sharingTypes,
+          essentialsCount: transformedFacilities.essentials.length,
+        });
+
+      } else {
+        throw new Error('Failed to fetch facilities');
+      }
+
+    } catch (error: any) {
+      console.error('❌ Failed to fetch facilities from API:', error);
+
+      if (hostelData?.allFacilities) {
+        setFacilitiesData(hostelData.allFacilities);
+        console.log('Using facilities from hostel data');
+      }
+
+      Toast.show({
+        type: 'info',
+        text1: 'Info',
+        text2: 'Using cached facility information'
+      });
+    } finally {
+      setFacilitiesLoading(false);
+    }
+  };
+
+  const fetchPricingData = async () => {
+    if (!hostelData) return;
+
+    try {
+      setLoadingPricing(true);
+      const hostelId = hostelData.hostelId || hostelData.id || hostelData._id;
+
+      if (hostelId) {
+        console.log(`📊 Fetching pricing data for hostel: ${hostelId}`);
+
+        try {
+          const response = await PricingService.getHostelPricing(hostelId);
+
+          if (response.success && response.pricing) {
+            console.log('✅ Real pricing data loaded from API:', response.pricing);
+            setApiPricingData(response.pricing);
+
+            const combinedPricing: CombinedPricingData = {};
+
+            ALL_SHARING_TYPES.forEach(type => {
+              combinedPricing[type] = {
+                daily: null,
+                monthly: null,
+                availableBeds: 0,
+                isAvailable: false,
+                displayName: SHARING_LABELS[type]
+              };
+            });
+
+            Object.keys(response.pricing).forEach(sharingType => {
+              const typeKey = sharingType.toLowerCase();
+
+              if (combinedPricing[typeKey]) {
+                const pricing = response.pricing[sharingType];
+
+                if (pricing.daily && pricing.daily > 0) {
+                  combinedPricing[typeKey].daily = {
+                    price: pricing.daily,
+                    currency: 'INR'
+                  };
+                  combinedPricing[typeKey].isAvailable = true;
+                }
+
+                if (pricing.monthly && pricing.monthly > 0) {
+                  combinedPricing[typeKey].monthly = {
+                    price: pricing.monthly,
+                    currency: 'INR'
+                  };
+                  combinedPricing[typeKey].isAvailable = true;
+                }
+              }
+            });
+
+            setPricingData(combinedPricing);
+
+            const prices: number[] = [];
+            Object.values(combinedPricing).forEach(typePricing => {
+              if (typePricing.monthly?.price && typePricing.monthly.price > 0) {
+                prices.push(typePricing.monthly.price);
+              }
+              if (typePricing.daily?.price && typePricing.daily.price > 0) {
+                prices.push(typePricing.daily.price * 30);
+              }
+            });
+
+            const startPrice = prices.length > 0 ? Math.min(...prices) : 0;
+            setCalculatedStartingPrice(startPrice);
+            console.log(`💰 Calculated starting price: ₹${startPrice}`);
+
+          } else {
+            console.warn('No pricing data in API response');
+          }
+        } catch (error) {
+          console.error('Error fetching pricing:', error);
+        }
+      }
+    } catch (error: any) {
+      console.error('Error in fetchPricingData:', error);
+    } finally {
+      setLoadingPricing(false);
+    }
+  };
+
+  const fetchRoomsData = async () => {
+    if (!hostelData) return;
+
+    const hostelId = hostelData.hostelId || hostelData.id || hostelData._id;
+
+    if (!hostelId) {
+      console.error('No hostel ID available for fetching rooms');
+      return;
+    }
+
+    try {
+      console.log(`🔄 Fetching rooms data for hostel: ${hostelId}`);
+
+      const response = await RoomService.getHostelRooms(hostelId);
+
+      if (response.success && response.data) {
+        console.log('✅ Rooms data loaded:', {
+          totalRooms: response.data.rooms?.length || 0,
+          bedAvailability: response.data.bedAvailabilityBySharing,
+          summary: response.data.summary
+        });
+
+        setRoomsData(response.data);
+
+        const availabilityByType: Record<string, RoomAvailability> = {};
+        const availableTypes: RoomAvailability[] = [];
+
+        if (response.data.bedAvailabilityBySharing && Array.isArray(response.data.bedAvailabilityBySharing)) {
+          response.data.bedAvailabilityBySharing.forEach((item: any) => {
+            const typeKey = RoomService.getSharingTypeKey(item.sharingType);
+            const displayName = RoomService.getSharingTypeDisplay(typeKey);
+
+            const availability: RoomAvailability = {
+              sharingType: typeKey,
+              availableBeds: item.availableBeds || 0,
+              totalBeds: item.totalBeds || 0,
+              availableRooms: 0,
+              totalRooms: 0,
+              rooms: response.data.rooms?.filter((room: any) =>
+                RoomService.getSharingTypeKey(room.sharingType) === typeKey
+              ) || []
+            };
+
+            if (availability.rooms.length > 0) {
+              availability.totalRooms = availability.rooms.length;
+              availability.availableRooms = availability.rooms.filter((room: any) =>
+                room.isAvailable && room.remaining > 0
+              ).length;
+            }
+
+            availabilityByType[typeKey] = availability;
+            availabilityByType[displayName] = availability;
+
+            if (availability.availableBeds > 0) {
+              availableTypes.push(availability);
+            }
+          });
+        }
+
+        setRoomAvailabilityByType(availabilityByType);
+        setAvailableSharingTypes(availableTypes);
+
+        console.log('📊 Room availability summary:', {
+          availableTypes: availableTypes.map(t => ({
+            type: t.sharingType,
+            beds: t.availableBeds,
+            rooms: t.availableRooms
+          })),
+          totalAvailableBeds: availableTypes.reduce((sum, type) => sum + type.availableBeds, 0)
+        });
+
+      } else {
+        console.warn('No valid rooms data in response');
+      }
+
+    } catch (error: any) {
+      console.error('❌ Failed to fetch rooms data:', error);
+    }
+  };
+
+  const fetchAllMapHostels = async () => {
+    try {
+      setMapLoading(true);
+      console.log('🗺️ Fetching all hostels for map...');
+      
+      const response = await LocationService.getAllHostelCoordinates();
+      
+      if (response && response.length > 0) {
+        const currentHostelId = hostelData?.hostelId || hostelData?.id || hostelData?._id;
+        const otherHostels = response.filter(hostel => 
+          hostel.hostelId !== currentHostelId &&
+          hostel.coordinates &&
+          Math.abs(hostel.coordinates.latitude) > 0 &&
+          Math.abs(hostel.coordinates.longitude) > 0 &&
+          hostel.coordinates.latitude !== 0 &&
+          hostel.coordinates.longitude !== 0
+        );
+        
+        console.log(`✅ Found ${otherHostels.length} other hostels for map`);
+        setAllMapHostels(otherHostels);
+      } else {
+        console.log('No hostels found for map');
+      }
+    } catch (error) {
+      console.error('❌ Error fetching map hostels:', error);
+      Toast.show({
+        type: 'error',
+        text1: 'Map Error',
+        text2: 'Failed to load hostel locations for map'
+      });
+    } finally {
+      setMapLoading(false);
+    }
+  };
+
   const onRefresh = () => {
     setRefreshing(true);
-    fetchHostelData();
+    fetchAllHostelData();
+    fetchHostelLocation();
+    fetchAllMapHostels();
   };
 
   useEffect(() => {
@@ -319,26 +574,62 @@ export default function HostelDetails() {
   };
 
   const getDisplayPrice = (): number => {
-    // Use calculated starting price from pricing API first
     if (calculatedStartingPrice > 0) {
       return calculatedStartingPrice;
     }
-
-    // Fallback to Redux starting price
     if (startingPrice !== null && startingPrice > 0) {
       return startingPrice;
     }
-
-    // Fallback to hostel data starting price
     if (hostelData?.startingPrice && hostelData.startingPrice > 0) {
       return hostelData.startingPrice;
     }
-
-    return 8000; // Default fallback
+    return 0;
   };
 
   const formatPrice = (price: number): string => {
     return `₹${price.toLocaleString('en-IN')}`;
+  };
+
+  const getCoordinates = () => {
+    if (!hostelData) {
+      return { latitude: 17.385044, longitude: 78.486671 };
+    }
+    
+    if (hostelLocationData?.location?.coordinates) {
+      return hostelLocationData.location.coordinates;
+    }
+    
+    if (hostelData.coordinates) {
+      return hostelData.coordinates;
+    }
+    
+    return { latitude: 17.385044, longitude: 78.486671 };
+  };
+
+  const getFormattedAddress = () => {
+    if (!hostelData) return 'No address provided';
+    
+    if (hostelLocationData?.location?.formattedAddress) {
+      return hostelLocationData.location.formattedAddress;
+    }
+    
+    if (hostelData.address) {
+      return hostelData.address;
+    }
+    
+    if (hostelLocationData?.location?.city) {
+      const city = hostelLocationData.location.city;
+      const state = hostelLocationData.location.state;
+      return state ? `${city}, ${state}` : city;
+    }
+    
+    if (hostelData.city) {
+      const city = hostelData.city;
+      const state = hostelData.state;
+      return state ? `${city}, ${state}` : city;
+    }
+    
+    return 'Address not available';
   };
 
   const handleImagePick = async () => {
@@ -393,21 +684,37 @@ export default function HostelDetails() {
       </Text>
     ));
 
-  // Get available beds for a sharing type from API response
   const getAvailableBeds = (sharingType: SharingType): number => {
-    if (!hostelRooms?.sharingTypeAvailability) return 0;
-    return hostelRooms.sharingTypeAvailability[sharingType]?.availableBeds || 0;
+    const availability = roomAvailabilityByType[sharingType];
+    if (availability) {
+      return availability.availableBeds;
+    }
+
+    if (roomsData?.bedAvailabilityBySharing) {
+      const item = roomsData.bedAvailabilityBySharing.find((item: any) =>
+        RoomService.getSharingTypeKey(item.sharingType) === sharingType
+      );
+      return item?.availableBeds || 0;
+    }
+
+    return 0;
   };
 
-  // Check if sharing type is available (has beds)
+  const getRoomAvailability = (sharingType: SharingType): RoomAvailability | null => {
+    const availability = roomAvailabilityByType[sharingType];
+    if (availability) {
+      return availability;
+    }
+
+    return null;
+  };
+
   const isSharingTypeAvailable = (sharingType: SharingType): boolean => {
     const availableBeds = getAvailableBeds(sharingType);
     return availableBeds > 0;
   };
 
-  // Get price for sharing type from pricing data
   const getPriceForSharingType = (sharingType: SharingType) => {
-    // Use pricing API data first
     if (pricingData?.[sharingType]) {
       return {
         monthly: pricingData[sharingType].monthly?.price || 0,
@@ -416,12 +723,10 @@ export default function HostelDetails() {
       };
     }
 
-    // Fallback to hostel data
-    const pricing = hostelData?.pricing?.[sharingType];
     return {
-      monthly: pricing?.monthly?.price || 0,
-      daily: pricing?.daily?.price || 0,
-      isAvailable: !!pricing
+      monthly: 0,
+      daily: 0,
+      isAvailable: false
     };
   };
 
@@ -431,7 +736,6 @@ export default function HostelDetails() {
       return;
     }
 
-    // Check availability from rooms data
     const availableBeds = getAvailableBeds(sharingType);
 
     if (availableBeds === 0) {
@@ -443,7 +747,6 @@ export default function HostelDetails() {
       return;
     }
 
-    // Get pricing from API data or hostel data
     const priceInfo = getPriceForSharingType(sharingType);
 
     router.push({
@@ -453,17 +756,17 @@ export default function HostelDetails() {
           _id: hostelData.id,
           hostelOwnerId: hostelData.hostelOwnerId || hostelData.id,
           hostelName: hostelData.name,
-          address: hostelData.address,
+          address: getFormattedAddress(),
           contact: hostelData.contact,
           email: hostelData.email,
           hostelType: hostelData.hostelType,
           pricing: pricingData,
-          coordinates: hostelData.coordinates,
+          coordinates: getCoordinates(),
           startingPrice: getDisplayPrice(),
           photos: hostelData.photos,
           summary: hostelData.summary,
           facilities: facilitiesData,
-          roomsData: hostelRooms
+          roomsData: roomsData
         }),
         selectedSharing: sharingType,
         monthlyPrice: priceInfo.monthly?.toString() || '0',
@@ -484,58 +787,44 @@ export default function HostelDetails() {
   const facilities = [
     {
       category: 'Room Types',
-      items: ALL_SHARING_TYPES.map(type => ({
-        name: `${SHARING_LABELS[type]} Room`,
-        key: type,
-        available: isSharingTypeAvailable(type)
-      }))
+      items: (facilitiesData?.sharingTypes || []).map((sharingType: string) => {
+        const internalType = sharingType.toLowerCase().replace(' sharing', '');
+        const isAvailable = isSharingTypeAvailable(internalType as SharingType);
+        const availability = getRoomAvailability(internalType as SharingType);
+
+        return {
+          name: sharingType,
+          key: internalType,
+          available: isAvailable,
+          availabilityText: availability ?
+            `${availability.availableBeds} bed${availability.availableBeds !== 1 ? 's' : ''} available` :
+            'Check availability'
+        };
+      })
     },
     {
       category: 'Bathroom',
-      items: [
-        {
-          name: 'Attached Bathroom',
-          key: 'attached',
-          available: facilitiesData?.bathroomTypes?.includes('Attached Bathroom') || false
-        },
-        {
-          name: 'Common Bathroom',
-          key: 'common',
-          available: facilitiesData?.bathroomTypes?.includes('Common Bathroom') || false
-        },
-      ],
+      items: (facilitiesData?.bathroomTypes || []).map((bathroomType: string) => ({
+        name: bathroomType,
+        key: bathroomType.toLowerCase().replace(' bathroom', '').replace(/\s+/g, '-'),
+        available: true
+      })),
     },
     {
       category: 'Essential Facilities',
-      items: [
-        { name: 'Air Conditioning', key: 'ac', available: facilitiesData?.essentials?.includes('Air Conditioning') || false },
-        { name: 'Free WiFi', key: 'wifi', available: facilitiesData?.essentials?.includes('Free WiFi') || false },
-        { name: 'Power Backup', key: 'power-backup', available: facilitiesData?.essentials?.includes('Power Backup') || false },
-        { name: 'CCTV Security', key: 'cctv', available: facilitiesData?.essentials?.includes('CCTV Security') || false },
-        { name: 'RO Water', key: 'ro-water', available: facilitiesData?.essentials?.includes('RO Water') || false },
-        { name: 'Daily Cleaning', key: 'cleaning', available: facilitiesData?.essentials?.includes('Daily Cleaning') || false },
-        { name: 'Elevator/Lift', key: 'lift', available: facilitiesData?.essentials?.includes('Elevator/Lift') || false },
-        { name: 'Laundry Service', key: 'laundry', available: facilitiesData?.essentials?.includes('Washing Machine') || false },
-        { name: 'Parking Space', key: 'parking', available: facilitiesData?.essentials?.includes('Parking Space') || false },
-        { name: 'Dining Hall', key: 'dining', available: facilitiesData?.essentials?.includes('Dining Hall') || false },
-        { name: 'Study Room/Library', key: 'library', available: facilitiesData?.essentials?.includes('Study Room/Library') || false },
-        { name: 'Hot Water / Geyser', key: 'geyser', available: facilitiesData?.essentials?.includes('Hot Water/Geyser/Inverter') || false },
-        { name: 'Inverter', key: 'inverter', available: facilitiesData?.essentials?.includes('Hot Water/Geyser/Inverter') || false },
-        { name: 'Room Heater', key: 'heater', available: facilitiesData?.essentials?.includes('Room Heater') || false },
-      ],
+      items: (facilitiesData?.essentials || []).map((essential: string) => ({
+        name: essential,
+        key: essential.toLowerCase().replace(/\s+/g, '-'),
+        available: true
+      })),
     },
     {
       category: 'Food Services',
-      items: [
-        { name: 'Vegetarian Meals', key: 'veg', available: facilitiesData?.foodServices?.includes('Vegetarian Meals') || false },
-        { name: 'Non-Vegetarian Meals', key: 'non-veg', available: facilitiesData?.foodServices?.includes('Non-vegetarian Meals') || false },
-        { name: 'Breakfast', key: 'breakfast', available: facilitiesData?.foodServices?.includes('Breakfast') || false },
-        { name: 'Lunch', key: 'lunch', available: facilitiesData?.foodServices?.includes('Lunch') || false },
-        { name: 'Dinner', key: 'dinner', available: facilitiesData?.foodServices?.includes('Dinner') || false },
-        { name: 'Tea/Coffee', key: 'tea-coffee', available: facilitiesData?.foodServices?.includes('Tea/Coffee') || false },
-        { name: 'Chinese Meals', key: 'chinese', available: facilitiesData?.foodServices?.includes('Chinese Meals') || false },
-        { name: 'North Indian Meals', key: 'north-indian', available: facilitiesData?.foodServices?.includes('North Indian Meals') || false },
-      ],
+      items: (facilitiesData?.foodServices || []).map((service: string) => ({
+        name: service,
+        key: service.toLowerCase().replace(/\s+/g, '-'),
+        available: true
+      })),
     }
   ];
 
@@ -553,7 +842,6 @@ export default function HostelDetails() {
     return `Book ${SHARING_LABELS[selectedSharing]}`;
   };
 
-  // Loading state
   if (!hostelData || isLoading) {
     return (
       <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -567,6 +855,8 @@ export default function HostelDetails() {
   }
 
   const displayPrice = getDisplayPrice();
+  const coordinates = getCoordinates();
+  const formattedAddress = getFormattedAddress();
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#ffffff' }}>
@@ -582,7 +872,6 @@ export default function HostelDetails() {
           />
         }
       >
-        {/* Header */}
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backIconContainer}>
             <Ionicons name="arrow-back" size={24} color="#333" />
@@ -591,7 +880,6 @@ export default function HostelDetails() {
           <View style={{ width: 24 }} />
         </View>
 
-        {/* Image Carousel */}
         <View style={styles.carouselContainer}>
           {photos.length > 0 ? (
             <>
@@ -640,7 +928,6 @@ export default function HostelDetails() {
           )}
         </View>
 
-        {/* Main Info Card */}
         <View style={styles.mainInfoCard}>
           <View style={styles.titleRow}>
             <Text style={styles.hostelNameTitle}>{hostelData?.name || 'Unnamed Hostel'}</Text>
@@ -649,7 +936,17 @@ export default function HostelDetails() {
             </View>
           </View>
 
-          <Text style={styles.hostelAddress}>{hostelData?.address || 'No address provided'}</Text>
+          <Text style={styles.hostelAddress}>{formattedAddress}</Text>
+
+          {hostelData.city && (
+            <View style={styles.locationDetails}>
+              <Ionicons name="location" size={14} color="#666" />
+              <Text style={styles.locationDetailsText}>
+                {hostelData.city}{hostelData.state ? `, ${hostelData.state}` : ''}
+                {hostelData.landmark ? ` • Near ${hostelData.landmark}` : ''}
+              </Text>
+            </View>
+          )}
 
           <View style={styles.priceContainer}>
             <Text style={styles.priceLabel}>Starts from</Text>
@@ -660,12 +957,6 @@ export default function HostelDetails() {
                 <Text style={styles.hostelPrice}>₹{displayPrice}</Text>
                 <Text style={styles.pricePeriod}>/month</Text>
               </>
-            )}
-            {!loadingPricing && calculatedStartingPrice > 0 && (
-              <View style={styles.apiPriceIndicator}>
-                <Ionicons name="cloud-done" size={12} color="#4CBB17" />
-                <Text style={styles.apiPriceText}>Live</Text>
-              </View>
             )}
           </View>
 
@@ -683,29 +974,64 @@ export default function HostelDetails() {
             </View>
           )}
 
-          {/* Rooms Summary from API */}
-          {hostelRooms?.summary && (
+          {facilitiesLoading && (
+            <View style={styles.loadingFacilities}>
+              <ActivityIndicator size="small" color="#4CBB17" />
+              <Text style={styles.loadingFacilitiesText}>Loading facilities...</Text>
+            </View>
+          )}
+
+          {roomsData?.summary && (
             <View style={styles.roomsSummaryContainer}>
               <Text style={styles.roomsSummaryTitle}>Rooms Summary:</Text>
               <View style={styles.roomsSummaryGrid}>
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryValue}>{hostelRooms.summary.totalRooms || 0}</Text>
+                  <Text style={styles.summaryValue}>{roomsData.summary.totalRooms || 0}</Text>
                   <Text style={styles.summaryLabel}>Total Rooms</Text>
                 </View>
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryValue}>{hostelRooms.summary.vacantBeds || 0}</Text>
+                  <Text style={styles.summaryValue}>{roomsData.summary.vacantBeds || 0}</Text>
                   <Text style={styles.summaryLabel}>Available Beds</Text>
                 </View>
                 <View style={styles.summaryItem}>
-                  <Text style={styles.summaryValue}>{hostelRooms.summary.totalBeds || 0}</Text>
+                  <Text style={styles.summaryValue}>{roomsData.summary.totalBeds || 0}</Text>
                   <Text style={styles.summaryLabel}>Total Beds</Text>
                 </View>
+                <View style={styles.summaryItem}>
+                  <Text style={styles.summaryValue}>{roomsData.summary.occupiedBeds || 0}</Text>
+                  <Text style={styles.summaryLabel}>Occupied Beds</Text>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {availableSharingTypes.length > 0 && (
+            <View style={styles.quickAvailabilityContainer}>
+              <Text style={styles.quickAvailabilityTitle}>Available Rooms:</Text>
+              <View style={styles.quickAvailabilityTags}>
+                {availableSharingTypes.slice(0, 3).map((availability, index) => (
+                  <View key={index} style={styles.availabilityTag}>
+                    <Ionicons name="bed-outline" size={14} color="#4CBB17" />
+                    <Text style={styles.availabilityTagText}>
+                      {SHARING_LABELS[availability.sharingType as SharingType] || availability.sharingType}
+                    </Text>
+                    <Text style={styles.availabilityTagCount}>
+                      ({availability.availableBeds} beds)
+                    </Text>
+                  </View>
+                ))}
+                {availableSharingTypes.length > 3 && (
+                  <View style={styles.moreAvailabilityTag}>
+                    <Text style={styles.moreAvailabilityText}>
+                      +{availableSharingTypes.length - 3} more
+                    </Text>
+                  </View>
+                )}
               </View>
             </View>
           )}
         </View>
 
-        {/* Description */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Description</Text>
           <Text style={styles.summaryText}>
@@ -713,124 +1039,70 @@ export default function HostelDetails() {
           </Text>
         </View>
 
-        {/* Facilities & Amenities */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Facilities & Amenities</Text>
           <Text style={styles.sectionSubtitle}>All available amenities at this hostel</Text>
 
-          {facilities.map((category, categoryIndex) => (
-            <View key={categoryIndex} style={styles.facilityCategory}>
-              <Text style={styles.facilityCategoryTitle}>{category.category}</Text>
-              <View style={styles.facilitiesGrid}>
-                {category.items.map((facility, index) => (
-                  <View key={index} style={styles.facilityItem}>
-                    <View style={[
-                      styles.facilityIconContainer,
-                      {
-                        backgroundColor: facility.available ? '#F0F8E7' : '#f8f9fa',
-                      }
-                    ]}>
-                      <Ionicons
-                        name={(() => {
-                          switch (facility.key) {
-                            case 'single':
-                            case 'double':
-                            case 'triple':
-                            case 'four':
-                            case 'five':
-                            case 'six':
-                            case 'seven':
-                            case 'eight':
-                            case 'nine':
-                            case 'ten':
-                              return 'bed-outline';
-                            case 'attached':
-                            case 'common':
-                              return 'water-outline';
-                            case 'ac':
-                              return 'snow';
-                            case 'wifi':
-                              return 'wifi';
-                            case 'power-backup':
-                              return 'flash';
-                            case 'cctv':
-                              return 'videocam-outline';
-                            case 'ro-water':
-                              return 'water-outline';
-                            case 'cleaning':
-                              return 'home-outline';
-                            case 'lift':
-                              return 'business-outline';
-                            case 'laundry':
-                              return 'shirt-outline';
-                            case 'parking':
-                              return 'car-sport-outline';
-                            case 'dining':
-                              return 'restaurant-outline';
-                            case 'library':
-                              return 'book-outline';
-                            case 'geyser':
-                            case 'inverter':
-                            case 'heater':
-                              return 'thermometer-outline';
-                            case 'veg':
-                              return 'leaf-outline';
-                            case 'non-veg':
-                              return 'restaurant-outline';
-                            case 'breakfast':
-                              return 'cafe-outline';
-                            case 'lunch':
-                            case 'dinner':
-                              return 'restaurant-outline';
-                            case 'tea-coffee':
-                              return 'cafe-outline';
-                            case 'chinese':
-                              return 'fast-food-outline';
-                            case 'north-indian':
-                              return 'restaurant-outline';
-                            default:
-                              return 'checkmark-circle-outline';
+          {facilitiesLoading ? (
+            <View style={styles.loadingContainer}>
+              <ActivityIndicator size="large" color="#4CBB17" />
+              <Text style={styles.loadingText}>Loading facilities...</Text>
+            </View>
+          ) : (
+            <>
+              {facilities.map((category, categoryIndex) => (
+                <View key={categoryIndex} style={styles.facilityCategory}>
+                  <Text style={styles.facilityCategoryTitle}>{category.category}</Text>
+                  <View style={styles.facilitiesGrid}>
+                    {category.items.map((facility, index) => (
+                      <View key={index} style={styles.facilityItem}>
+                        <View style={[
+                          styles.facilityIconContainer,
+                          {
+                            backgroundColor: facility.available ? '#F0F8E7' : '#f8f9fa',
                           }
-                        })()}
-                        size={22}
-                        color={facility.available ? '#4CBB17' : '#ccc'}
-                      />
-                    </View>
-                    <Text style={[
-                      styles.facilityName,
-                      { color: facility.available ? '#333' : '#999' }
-                    ]}>
-                      {facility.name}
-                    </Text>
-                    <View style={[
-                      styles.availabilityIndicator,
-                      { backgroundColor: facility.available ? '#4CBB17' : '#ccc' }
-                    ]}>
-                      <Ionicons
-                        name={facility.available ? "checkmark" : "close"}
-                        size={12}
-                        color="#fff"
-                      />
-                    </View>
+                        ]}>
+                          <Ionicons
+                            name="checkmark-circle-outline"
+                            size={22}
+                            color={facility.available ? '#4CBB17' : '#ccc'}
+                          />
+                        </View>
+                        <View style={styles.facilityTextContainer}>
+                          <Text style={[
+                            styles.facilityName,
+                            { color: facility.available ? '#333' : '#999' }
+                          ]}>
+                            {facility.name}
+                          </Text>
+                          {categoryIndex === 0 && facility.availabilityText && (
+                            <Text style={[
+                              styles.facilityAvailabilityText,
+                              { color: facility.available ? '#4CBB17' : '#999' }
+                            ]}>
+                              {facility.availabilityText}
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+                    ))}
                   </View>
-                ))}
-              </View>
-            </View>
-          ))}
+                </View>
+              ))}
 
-          {/* Custom Food Menu */}
-          {facilitiesData?.customFoodMenu && (
-            <View style={styles.customFoodMenuContainer}>
-              <Text style={styles.customFoodMenuTitle}>Custom Food Menu</Text>
-              <Text style={styles.customFoodMenuText}>{facilitiesData.customFoodMenu}</Text>
-            </View>
+              {facilitiesData?.customFoodMenu && (
+                <View style={styles.customFoodMenuContainer}>
+                  <Text style={styles.customFoodMenuTitle}>Custom Food Menu</Text>
+                  <Text style={styles.customFoodMenuText}>{facilitiesData.customFoodMenu}</Text>
+                </View>
+              )}
+            </>
           )}
         </View>
 
-        {/* Room Options - All 10 sharing types with REAL API data */}
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Room Options</Text>
-          <Text style={styles.sectionSubtitle}>Select your preferred sharing type</Text>
+          <Text style={styles.sectionTitle}>Room Options & Availability</Text>
+          <Text style={styles.sectionSubtitle}>Real-time pricing and availability</Text>
 
           {roomsLoading || loadingPricing ? (
             <View style={styles.loadingContainer}>
@@ -838,98 +1110,155 @@ export default function HostelDetails() {
               <Text style={styles.loadingText}>Loading room information...</Text>
             </View>
           ) : (
-            <View style={styles.sharingGrid}>
-              {ALL_SHARING_TYPES.map((sharingType) => {
-                const isAvailable = isSharingTypeAvailable(sharingType);
-                const availableBeds = getAvailableBeds(sharingType);
-                const isSoldOut = availableBeds === 0;
-                const isSelected = selectedSharing === sharingType;
-                const priceInfo = getPriceForSharingType(sharingType);
-                const displayName = SHARING_LABELS[sharingType];
-                const hasPrice = priceInfo.monthly > 0 || priceInfo.daily > 0;
+            <>
+              {roomsData?.summary && (
+                <View style={styles.realAvailabilitySummary}>
+                  <Text style={styles.realSummaryTitle}>Current Availability</Text>
+                  <View style={styles.realSummaryGrid}>
+                    <View style={styles.realSummaryItem}>
+                      <Text style={styles.realSummaryValue}>{roomsData.summary.totalBeds || 0}</Text>
+                      <Text style={styles.realSummaryLabel}>Total Beds</Text>
+                    </View>
+                    <View style={styles.realSummaryItem}>
+                      <Text style={styles.realSummaryValue}>{roomsData.summary.availableBeds || 0}</Text>
+                      <Text style={styles.realSummaryLabel}>Available Beds</Text>
+                    </View>
+                    <View style={styles.realSummaryItem}>
+                      <Text style={styles.realSummaryValue}>{roomsData.summary.totalRooms || 0}</Text>
+                      <Text style={styles.realSummaryLabel}>Total Rooms</Text>
+                    </View>
+                  </View>
+                </View>
+              )}
 
-                return (
-                  <TouchableOpacity
-                    key={sharingType}
-                    style={[
-                      styles.sharingItem,
-                      isSelected && styles.selectedSharing,
-                      isSoldOut && styles.soldOutSharing,
-                      (!isAvailable || !hasPrice) && styles.notAvailableSharing
-                    ]}
-                    onPress={() => {
-                      if (isAvailable && availableBeds > 0 && hasPrice) {
-                        setSelectedSharing(sharingType);
-                      }
-                    }}
-                    disabled={!isAvailable || availableBeds === 0 || !hasPrice}
-                  >
-                    <Text style={styles.sharingType}>{displayName}</Text>
+              {apiPricingData && (
+                <View style={styles.pricingInfoContainer}>
+                  <Text style={styles.pricingInfoTitle}>Real Pricing Data</Text>
+                  <Text style={styles.pricingInfoText}>
+                    Prices fetched from: /public/pricing/{hostelData.hostelId}
+                  </Text>
+                </View>
+              )}
 
-                    {hasPrice ? (
-                      <>
-                        {priceInfo.monthly > 0 ? (
-                          <>
-                            <Text style={styles.sharingPrice}>₹{priceInfo.monthly}/month</Text>
-                            {priceInfo.daily > 0 && (
-                              <Text style={styles.dailyPrice}>₹{priceInfo.daily}/day</Text>
-                            )}
-                          </>
-                        ) : priceInfo.daily > 0 ? (
-                          <Text style={styles.sharingPrice}>₹{priceInfo.daily}/day</Text>
-                        ) : (
-                          <Text style={styles.notAvailablePrice}>Contact for price</Text>
-                        )}
+              <View style={styles.sharingGrid}>
+                {ALL_SHARING_TYPES.map((sharingType) => {
+                  const isAvailable = isSharingTypeAvailable(sharingType);
+                  const availableBeds = getAvailableBeds(sharingType);
+                  const isSoldOut = availableBeds === 0;
+                  const isSelected = selectedSharing === sharingType;
+                  const priceInfo = getPriceForSharingType(sharingType);
+                  const displayName = SHARING_LABELS[sharingType];
+                  const hasPrice = priceInfo.monthly > 0 || priceInfo.daily > 0;
+                  const availability = getRoomAvailability(sharingType);
 
-                        <Text style={[
-                          styles.sharingAvailability,
-                          { color: availableBeds > 0 ? '#4CBB17' : '#ff6b6b' }
-                        ]}>
-                          {availableBeds > 0
-                            ? `${availableBeds} bed${availableBeds !== 1 ? 's' : ''} available`
-                            : 'Sold out'}
-                        </Text>
-                      </>
-                    ) : (
-                      <>
-                        <Text style={styles.notAvailablePrice}>No pricing</Text>
-                        <Text style={styles.notAvailableText}>Contact for details</Text>
-                      </>
-                    )}
+                  return (
+                    <TouchableOpacity
+                      key={sharingType}
+                      style={[
+                        styles.sharingItem,
+                        isSelected && styles.selectedSharing,
+                        isSoldOut && styles.soldOutSharing,
+                        (!hasPrice) && styles.notAvailableSharing
+                      ]}
+                      onPress={() => {
+                        if (isAvailable && availableBeds > 0 && hasPrice) {
+                          setSelectedSharing(sharingType);
+                        } else if (!hasPrice) {
+                          Toast.show({
+                            type: 'info',
+                            text1: 'No Pricing',
+                            text2: `${displayName} pricing not available`
+                          });
+                        }
+                      }}
+                      disabled={!isAvailable || availableBeds === 0 || !hasPrice}
+                    >
+                      <Text style={styles.sharingType}>{displayName}</Text>
 
-                    {isSelected && isAvailable && availableBeds > 0 && hasPrice && (
-                      <View style={styles.selectedIndicator}>
-                        <Ionicons name="checkmark-circle" size={16} color="#4CBB17" />
-                      </View>
-                    )}
+                      {hasPrice ? (
+                        <>
+                          {priceInfo.monthly > 0 ? (
+                            <>
+                              <Text style={styles.sharingPrice}>₹{priceInfo.monthly}/month</Text>
+                              {priceInfo.daily > 0 && (
+                                <Text style={styles.dailyPrice}>₹{priceInfo.daily}/day</Text>
+                              )}
+                            </>
+                          ) : priceInfo.daily > 0 ? (
+                            <Text style={styles.sharingPrice}>₹{priceInfo.daily}/day</Text>
+                          ) : (
+                            <Text style={styles.notAvailablePrice}>Contact for price</Text>
+                          )}
 
-                    {isSoldOut && (
-                      <View style={styles.soldOutOverlay}>
-                        <Text style={styles.soldOutText}>SOLD OUT</Text>
-                      </View>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+                          <View style={styles.availabilityDetails}>
+                            <Ionicons
+                              name={availableBeds > 0 ? "bed-outline" : "bed"}
+                              size={14}
+                              color={availableBeds > 0 ? '#4CBB17' : '#ff6b6b'}
+                            />
+                            <Text style={[
+                              styles.sharingAvailability,
+                              { color: availableBeds > 0 ? '#4CBB17' : '#ff6b6b' }
+                            ]}>
+                              {availableBeds > 0
+                                ? `${availableBeds} bed${availableBeds !== 1 ? 's' : ''} available`
+                                : 'Sold out'}
+                            </Text>
+                          </View>
+
+                          {availability && (
+                            <Text style={styles.roomDetails}>
+                              {availability.availableRooms} room{availability.availableRooms !== 1 ? 's' : ''} •
+                              {availability.totalBeds} total beds
+                            </Text>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <Text style={styles.notAvailablePrice}>No pricing data</Text>
+                          <Text style={styles.notAvailableText}>Contact hostel</Text>
+                        </>
+                      )}
+
+                      {isSelected && isAvailable && availableBeds > 0 && hasPrice && (
+                        <View style={styles.selectedIndicator}>
+                          <Ionicons name="checkmark-circle" size={16} color="#4CBB17" />
+                        </View>
+                      )}
+
+                      {isSoldOut && (
+                        <View style={styles.soldOutOverlay}>
+                          <Text style={styles.soldOutText}>SOLD OUT</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <View style={styles.realStartingPriceInfo}>
+                <Text style={styles.realStartingPriceLabel}>
+                  {loadingPricing ? 'Calculating...' : 'Starting from:'}
+                </Text>
+                {loadingPricing ? (
+                  <ActivityIndicator size="small" color="#4CBB17" style={{ marginLeft: 8 }} />
+                ) : (
+                  <Text style={styles.realStartingPriceValue}>
+                    {formatPrice(displayPrice)}/month
+                  </Text>
+                )}
+              </View>
+
+              <View style={styles.dataSourceInfo}>
+                <Ionicons name="information-circle-outline" size={14} color="#666" />
+                <Text style={styles.dataSourceText}>
+                  Prices and availability fetched from real APIs
+                </Text>
+              </View>
+            </>
           )}
-
-          {/* Starting Price Info */}
-          <View style={styles.startingPriceInfo}>
-            <Text style={styles.startingPriceLabel}>
-              {loadingPricing ? 'Fetching prices...' : 'Starting Price:'}
-            </Text>
-            {loadingPricing ? (
-              <ActivityIndicator size="small" color="#4CBB17" style={{ marginLeft: 8 }} />
-            ) : (
-              <Text style={styles.startingPriceValue}>
-                {formatPrice(displayPrice)}/month
-              </Text>
-            )}
-          </View>
         </View>
 
-        {/* Guest Reviews */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Guest Reviews</Text>
 
@@ -1006,21 +1335,90 @@ export default function HostelDetails() {
           ))}
         </View>
 
-        {/* Location */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Location</Text>
-          <View style={styles.coordinatesContainer}>
-            <Text style={styles.coordinatesText}>📍 {hostelData.coordinates?.latitude?.toFixed(6) || '17.385044'}, {hostelData.coordinates?.longitude?.toFixed(6) || '78.486671'}</Text>
-          </View>
-          {/* <MapViewWrapper
-            latitude={hostelData.coordinates?.latitude || 17.385044}
-            longitude={hostelData.coordinates?.longitude || 78.486671}
-            title={hostelData?.name || 'Hostel Location'}
-          /> */}
+          
+          {locationLoading ? (
+            <View style={styles.locationLoadingContainer}>
+              <ActivityIndicator size="small" color="#4CBB17" />
+              <Text style={styles.locationLoadingText}>Fetching hostel location...</Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.locationInfoContainer}>
+                <View style={styles.locationInfoRow}>
+                  <Ionicons name="location" size={16} color="#4CBB17" />
+                  <Text style={styles.locationInfoText}>
+                    {formattedAddress}
+                  </Text>
+                </View>
+                
+                {hostelData.city && (
+                  <View style={styles.locationInfoRow}>
+                    <Ionicons name="business" size={16} color="#666" />
+                    <Text style={styles.locationInfoText}>
+                      {hostelData.city}{hostelData.state ? `, ${hostelData.state}` : ''}
+                    </Text>
+                  </View>
+                )}
+                
+                {hostelData.landmark && (
+                  <View style={styles.locationInfoRow}>
+                    <Ionicons name="flag" size={16} color="#666" />
+                    <Text style={styles.locationInfoText}>
+                      Near {hostelData.landmark}
+                    </Text>
+                  </View>
+                )}
+                
+                <View style={styles.coordinatesContainer}>
+                  <Text style={styles.coordinatesText}>
+                    📍 Coordinates: {coordinates.latitude.toFixed(6)}, {coordinates.longitude.toFixed(6)}
+                  </Text>
+                  {hostelLocationData && (
+                    <Text style={styles.coordinatesSource}>
+                      Source: Hostel Location API
+                    </Text>
+                  )}
+                </View>
+              </View>
+              
+              <View style={styles.mapContainer}>
+                {mapLoading ? (
+                  <View style={styles.mapLoadingContainer}>
+                    <ActivityIndicator size="large" color="#4CBB17" />
+                    <Text style={styles.mapLoadingText}>Loading map...</Text>
+                  </View>
+                ) : (
+                  <>
+                    <Text style={styles.mapTitle}>Hostel Location on Map</Text>
+                    <Text style={styles.mapSubtitle}>
+                      {allMapHostels.length} other hostels shown in blue
+                    </Text>
+                    <MapViewWrapper
+                      latitude={coordinates.latitude}
+                      longitude={coordinates.longitude}
+                      title={hostelData?.name || 'Hostel Location'}
+                      allHostels={allMapHostels}
+                    />
+                    <View style={styles.mapLegend}>
+                      <View style={styles.legendItem}>
+                        <View style={[styles.legendColor, { backgroundColor: '#4CBB17' }]} />
+                        <Text style={styles.legendText}>This Hostel</Text>
+                      </View>
+                      <View style={styles.legendItem}>
+                        <View style={[styles.legendColor, { backgroundColor: '#2196F3' }]} />
+                        <Text style={styles.legendText}>Other Hostels</Text>
+                      </View>
+                    </View>
+                  </>
+                )}
+              </View>
+            </>
+          )}
         </View>
       </ScrollView>
 
-      {/* Fixed Bottom Book Button */}
       <View style={styles.bookButtonContainer}>
         <TouchableOpacity
           style={[
@@ -1146,6 +1544,79 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
+  locationDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  locationDetailsText: {
+    fontSize: 14,
+    color: '#666',
+    marginLeft: 6,
+  },
+  loadingFacilities: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    padding: 8,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+  },
+  loadingFacilitiesText: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#666',
+  },
+  quickAvailabilityContainer: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  quickAvailabilityTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  quickAvailabilityTags: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  availabilityTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0F8E7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginRight: 8,
+    marginBottom: 6,
+  },
+  availabilityTagText: {
+    fontSize: 12,
+    color: '#4CBB17',
+    fontWeight: '500',
+    marginLeft: 4,
+    marginRight: 2,
+  },
+  availabilityTagCount: {
+    fontSize: 11,
+    color: '#666',
+  },
+  moreAvailabilityTag: {
+    backgroundColor: '#f5f5f5',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    marginRight: 8,
+    marginBottom: 6,
+  },
+  moreAvailabilityText: {
+    fontSize: 12,
+    color: '#666',
+    fontWeight: '500',
+  },
   roomsSummaryContainer: {
     marginTop: 16,
     paddingTop: 16,
@@ -1160,11 +1631,13 @@ const styles = StyleSheet.create({
   },
   roomsSummaryGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
   },
   summaryItem: {
     alignItems: 'center',
-    flex: 1,
+    width: '48%',
+    marginBottom: 12,
   },
   summaryValue: {
     fontSize: 18,
@@ -1176,6 +1649,77 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     textAlign: 'center',
+  },
+  facilityTextContainer: {
+    flex: 1,
+  },
+  facilityAvailabilityText: {
+    fontSize: 10,
+    marginTop: 2,
+    fontStyle: 'italic',
+  },
+  realAvailabilitySummary: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  realSummaryTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  realSummaryGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  realSummaryItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  realSummaryValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#4CBB17',
+    marginBottom: 4,
+  },
+  realSummaryLabel: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'center',
+  },
+  pricingInfoContainer: {
+    backgroundColor: '#e3f2fd',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  pricingInfoTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1976d2',
+    marginBottom: 4,
+  },
+  pricingInfoText: {
+    fontSize: 12,
+    color: '#1976d2',
+    fontStyle: 'italic',
+  },
+  availabilityDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  roomDetails: {
+    fontSize: 10,
+    color: '#999',
+    textAlign: 'center',
+    marginTop: 2,
   },
   notAvailableSharing: {
     opacity: 0.6,
@@ -1220,7 +1764,7 @@ const styles = StyleSheet.create({
   hostelAddress: {
     fontSize: 14,
     color: "#666",
-    marginBottom: 12,
+    marginBottom: 8,
     lineHeight: 20,
   },
   priceContainer: {
@@ -1243,20 +1787,6 @@ const styles = StyleSheet.create({
     color: "#666",
     marginLeft: 4,
     marginRight: 8,
-  },
-  apiPriceIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F0F8E7',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  apiPriceText: {
-    fontSize: 10,
-    color: '#4CBB17',
-    fontWeight: '600',
-    marginLeft: 2,
   },
   quickFacilities: {
     marginTop: 8,
@@ -1319,7 +1849,27 @@ const styles = StyleSheet.create({
     color: '#666',
     lineHeight: 18,
   },
-  startingPriceInfo: {
+  realStartingPriceInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  realStartingPriceLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  realStartingPriceValue: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#4CBB17',
+    marginLeft: 8,
+  },
+  dataSourceInfo: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1328,16 +1878,11 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
   },
-  startingPriceLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
-  },
-  startingPriceValue: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#4CBB17',
-    marginLeft: 8,
+  dataSourceText: {
+    fontSize: 12,
+    color: '#666',
+    marginLeft: 6,
+    fontStyle: 'italic',
   },
   sectionTitle: {
     fontSize: 18,
@@ -1370,7 +1915,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   facilityItem: {
-    width: "48%",
+    width: "100%",
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#f8f9fa",
@@ -1390,13 +1935,6 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontWeight: "500",
-  },
-  availabilityIndicator: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    justifyContent: "center",
-    alignItems: "center",
   },
   sharingGrid: {
     flexDirection: "row",
@@ -1446,6 +1984,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "500",
     textAlign: "center",
+    marginLeft: 4,
   },
   selectedIndicator: {
     position: "absolute",
@@ -1468,6 +2007,98 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     fontSize: 12,
     transform: [{ rotate: "-45deg" }],
+  },
+  locationInfoContainer: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 16,
+  },
+  locationInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  locationInfoText: {
+    fontSize: 14,
+    color: '#333',
+    marginLeft: 8,
+    flex: 1,
+  },
+  coordinatesContainer: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  coordinatesText: {
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  coordinatesSource: {
+    fontSize: 10,
+    color: '#4CBB17',
+    fontStyle: 'italic',
+    marginTop: 4,
+  },
+  mapContainer: {
+    marginTop: 8,
+  },
+  mapLoadingContainer: {
+    height: 250,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 12,
+  },
+  mapLoadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#666',
+  },
+  mapTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
+  },
+  mapSubtitle: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 12,
+  },
+  mapLegend: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 12,
+    gap: 16,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  legendColor: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 6,
+  },
+  legendText: {
+    fontSize: 12,
+    color: '#666',
+  },
+  locationLoadingContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+  },
+  locationLoadingText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#666',
   },
   addReviewSection: {
     backgroundColor: "#f8f9fa",
@@ -1590,14 +2221,6 @@ const styles = StyleSheet.create({
     height: 80,
     borderRadius: 8,
     marginRight: 8,
-  },
-  coordinatesContainer: {
-    marginBottom: 12,
-  },
-  coordinatesText: {
-    fontSize: 14,
-    color: "#666",
-    fontWeight: "500",
   },
   bookButtonContainer: {
     position: "absolute",

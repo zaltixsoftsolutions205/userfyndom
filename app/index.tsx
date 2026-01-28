@@ -1,171 +1,3 @@
-// import React, { useEffect, useState, useRef } from "react";
-// import {
-//   StyleSheet,
-//   View,
-//   Text,
-//   TouchableOpacity,
-//   Image,
-//   SafeAreaView,
-//   Animated,
-// } from "react-native";
-// import { useRouter } from "expo-router";
-// import AsyncStorage from "@react-native-async-storage/async-storage";
-// import { MaterialIcons } from "@expo/vector-icons";
-
-// export default function IndexScreen() {
-//   const router = useRouter();
-//   const [loading, setLoading] = useState(true);
-//   const [slide, setSlide] = useState(1);
-
-//   // Animation refs
-//   const fadeAnim = useRef(new Animated.Value(1)).current;
-//   const slideAnim = useRef(new Animated.Value(0)).current;
-//   const textFade = useRef(new Animated.Value(0)).current;
-//   const textSlide = useRef(new Animated.Value(30)).current;
-
-//   useEffect(() => {
-//     const checkLogin = async () => {
-//       const token = await AsyncStorage.getItem("userToken");
-//       if (token) {
-//         router.replace("/Home");
-//       } else {
-//         setTimeout(() => setLoading(false), 2000);
-//       }
-//     };
-//     checkLogin();
-//   }, []);
-
-//   const slides = [
-//     {
-//       id: 1,
-//       bgColor: "#c7d5c5ff",
-//       icon: require("../assets/hostel.png"),
-//       heading: "Book Your Perfect Hostel",
-//       subtitle:
-//         "Find safe, affordable hostels with just one tap. Comfort, convenience, and community — all in one place.",
-//     },
-//     {
-//       id: 2,
-//       bgColor: "#c7d5c5ff",
-//       icon: require("../assets/secure.png"),
-//       heading: "Secure Payments",
-//       subtitle:
-//         "Pay easily and securely within the app — your transactions are protected with advanced encryption.",
-//     },
-//   ];
-
-//   const currentSlide = slides.find((s) => s.id === slide);
-
-//   // animate both image and text
-//   const animateSlide = () => {
-//     fadeAnim.setValue(0);
-//     slideAnim.setValue(50);
-//     textFade.setValue(0);
-//     textSlide.setValue(30);
-
-//     Animated.sequence([
-//       // Step 1: Image fade + slide in
-//       Animated.parallel([
-//         Animated.timing(fadeAnim, {
-//           toValue: 1,
-//           duration: 500,
-//           useNativeDriver: true,
-//         }),
-//         Animated.spring(slideAnim, {
-//           toValue: 0,
-//           useNativeDriver: true,
-//         }),
-//       ]),
-
-//       // Step 2: Then show text
-//       Animated.parallel([
-//         Animated.timing(textFade, {
-//           toValue: 1,
-//           duration: 600,
-//           useNativeDriver: true,
-//         }),
-//         Animated.spring(textSlide, {
-//           toValue: 0,
-//           friction: 6,
-//           useNativeDriver: true,
-//         }),
-//       ]),
-//     ]).start();
-//   };
-
-//   useEffect(() => {
-//     // Run animation when slide changes
-//     animateSlide();
-//   }, [slide]);
-
-//   const handleNext = () => {
-//     if (slide === 1) setSlide(2);
-//     else router.push("/Register");
-//   };
-
-//   const handleBack = () => setSlide(1);
-
-//   if (loading) {
-//     return (
-//       <View style={styles.splashContainer}>
-//         <Image
-//           source={require("../assets/logo.png")}
-//           style={styles.splashLogo}
-//           resizeMode="contain"
-//         />
-//       </View>
-//     );
-//   }
-
-//   return (
-//     <SafeAreaView style={styles.container}>
-//       {/* Top Circle with Animated Icon */}
-//       <Animated.View
-//         style={[
-//           styles.topHalfCircle,
-//           {
-//             backgroundColor: currentSlide.bgColor,
-//             opacity: fadeAnim,
-//             transform: [{ translateX: slideAnim }],
-//           },
-//         ]}
-//       >
-//         <Image source={currentSlide.icon} style={styles.hostelIcon} />
-//       </Animated.View>
-
-//       {/* Text Section */}
-//       <Animated.View
-//         style={[
-//           styles.textSection,
-//           {
-//             opacity: textFade,
-//             transform: [{ translateY: textSlide }],
-//           },
-//         ]}
-//       >
-//         <Text style={styles.heading}>{currentSlide.heading}</Text>
-//         <Text style={styles.subtitle}>{currentSlide.subtitle}</Text>
-//       </Animated.View>
-
-//       {/* Bottom Buttons */}
-//       <View style={styles.bottomButtons}>
-//         {slide === 2 ? (
-//           <TouchableOpacity onPress={handleBack}>
-//             <Text style={styles.skipText}>Back</Text>
-//           </TouchableOpacity>
-//         ) : (
-//           <TouchableOpacity onPress={() => router.push("/login")}>
-//             <Text style={styles.skipText}>Skip</Text>
-//           </TouchableOpacity>
-//         )}
-
-//         <TouchableOpacity style={styles.nextButton} onPress={handleNext}>
-//           <MaterialIcons name="arrow-forward" size={28} color="#fff" />
-//         </TouchableOpacity>
-//       </View>
-//     </SafeAreaView>
-//   );
-// }
 import React, { useEffect, useState, useRef } from "react";
 import {
   StyleSheet,
@@ -175,14 +7,18 @@ import {
   Image,
   SafeAreaView,
   Animated,
+  ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
-import { useAuth } from "../components/AuthProvider";
+import { useSelector, useDispatch } from "react-redux";
+import { RootState } from "./reduxStore/store/store";
+import { initializeAuth } from "./reduxStore/reduxSlices/authSlice";
 import { MaterialIcons } from "@expo/vector-icons";
 
 export default function IndexScreen() {
   const router = useRouter();
-  const { isInitialized, isAuthenticated } = useAuth();
+  const dispatch = useDispatch();
+  const auth = useSelector((state: RootState) => state.auth); // FIXED: Added RootState type
   const [slide, setSlide] = useState(1);
 
   // Animation refs
@@ -191,11 +27,27 @@ export default function IndexScreen() {
   const textFade = useRef(new Animated.Value(0)).current;
   const textSlide = useRef(new Animated.Value(30)).current;
 
+  // Initialize auth on mount
   useEffect(() => {
-    if (isInitialized && isAuthenticated) {
-      router.replace("/Home");
+    console.log('IndexScreen: Initializing auth');
+    dispatch(initializeAuth());
+  }, []);
+
+  // Redirect if authenticated
+  useEffect(() => {
+    console.log('IndexScreen: Auth state', {
+      isInitialized: auth.isInitialized,
+      isAuthenticated: auth.isAuthenticated,
+      loading: auth.loading
+    });
+
+    if (auth.isInitialized && auth.isAuthenticated) {
+      console.log('IndexScreen: User authenticated, redirecting to Home');
+      setTimeout(() => {
+        router.replace("/(tabs)/Home");
+      }, 500);
     }
-  }, [isInitialized, isAuthenticated]);
+  }, [auth.isInitialized, auth.isAuthenticated]);
 
   const slides = [
     {
@@ -214,7 +66,7 @@ export default function IndexScreen() {
     },
   ];
 
-  const currentSlide = slides.find((s) => s.id === slide);
+  const currentSlide = slides.find((s) => s.id === slide) || slides[0]; // Added fallback
 
   const animateSlide = () => {
     fadeAnim.setValue(0);
@@ -261,7 +113,7 @@ export default function IndexScreen() {
   const handleBack = () => setSlide(1);
 
   // Show loading while initializing auth
-  if (!isInitialized) {
+  if (auth.loading || !auth.isInitialized) {
     return (
       <View style={styles.splashContainer}>
         <Image
@@ -269,6 +121,22 @@ export default function IndexScreen() {
           style={styles.splashLogo}
           resizeMode="contain"
         />
+        <ActivityIndicator size="large" color="#219150" style={styles.loader} />
+      </View>
+    );
+  }
+
+  // If user is already authenticated, show loading while redirecting
+  if (auth.isAuthenticated) {
+    return (
+      <View style={styles.splashContainer}>
+        <Image
+          source={require("../assets/logo.png")}
+          style={styles.splashLogo}
+          resizeMode="contain"
+        />
+        <Text style={styles.redirectText}>Redirecting to Home...</Text>
+        <ActivityIndicator size="large" color="#219150" style={styles.loader} />
       </View>
     );
   }
@@ -323,7 +191,6 @@ export default function IndexScreen() {
   );
 }
 
-// ... styles remain the same
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -340,6 +207,16 @@ const styles = StyleSheet.create({
   splashLogo: {
     width: 220,
     height: 220,
+    marginBottom: 20,
+  },
+  loader: {
+    marginTop: 20,
+  },
+  redirectText: {
+    fontSize: 16,
+    color: "#219150",
+    marginTop: 10,
+    marginBottom: 10,
   },
   topHalfCircle: {
     width: 500,
@@ -356,17 +233,16 @@ const styles = StyleSheet.create({
     marginBottom: 30,
   },
   hostelIcon: {
-  width: 300,
-  height: 315,
-  marginTop: 30,
-  marginLeft: -20,
-  borderBottomLeftRadius: 80,   // round bottom-left corner
-  borderBottomRightRadius: 80,  // round bottom-right corner
-  borderTopLeftRadius: 0,       // keep top corners sharp
-  borderTopRightRadius: 0,
-  overflow: "hidden",           // ensures the image actually gets rounded
-},
-
+    width: 300,
+    height: 315,
+    marginTop: 30,
+    marginLeft: -20,
+    borderBottomLeftRadius: 80,
+    borderBottomRightRadius: 80,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
+    overflow: "hidden",
+  },
   textSection: {
     alignItems: "center",
     justifyContent: "center",

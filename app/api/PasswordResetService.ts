@@ -1,3 +1,4 @@
+// app/api/PasswordResetService.ts
 import ApiClient from "./ApiClient";
 
 export interface ForgotPasswordResponse {
@@ -10,38 +11,41 @@ export interface VerifyOtpResponse {
   message: string;
   data: {
     email: string;
-    otpValid: boolean;
+    resetToken: string;
+    expiresIn: number;
   };
 }
 
 export interface ResetPasswordResponse {
   success: boolean;
   message: string;
+  data: {
+    email: string;
+    passwordReset: boolean;
+    loginRequired: boolean;
+  };
 }
 
 class PasswordResetService {
-  // Step 1: Send OTP
+  // STEP 1 – Send OTP
   async forgotPassword(email: string): Promise<ForgotPasswordResponse> {
-    return ApiClient.post("/password-reset/forgot-password", { email });
+    return ApiClient.post("/students/forgot-password", { email });
   }
 
-  // Step 2: Verify OTP
+  // STEP 2 – Verify OTP
   async verifyOtp(email: string, otp: string): Promise<VerifyOtpResponse> {
-    return ApiClient.post("/password-reset/verify-otp", {
-      email,
-      otp,
-    });
+    return ApiClient.post("/students/verify-otp", { email, otp });
   }
 
-  // Step 3: Reset Password
+  // STEP 3 – Reset Password
   async resetPassword(
     email: string,
-    otp: string,
+    resetToken: string,
     newPassword: string
   ): Promise<ResetPasswordResponse> {
-    return ApiClient.post("/password-reset/reset-password", {
+    return ApiClient.post("/students/reset-password", {
       email,
-      otp,
+      resetToken,
       newPassword,
     });
   }

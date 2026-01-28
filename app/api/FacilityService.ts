@@ -1,85 +1,99 @@
-// app/api/FacilityService.ts
+// app/api/HostelFacilitiesService.ts - UPDATED
 import ApiClient from "./ApiClient";
 
-export interface FacilitiesResponse {
+export interface HostelFacilitiesResponse {
   success: boolean;
   data: {
+    hostelId: string;
+    hostelName: string;
     sharingTypes: string[];
     bathroomTypes: string[];
     essentials: string[];
     foodServices: string[];
-    customFoodMenu: string;
+    customFoodMenu?: string;
   };
 }
 
-export interface ParsedFacilities {
-  sharingNumbers: number[];
+export interface TransformedFacilities {
+  sharingTypes: string[];
   bathroomTypes: string[];
   essentials: string[];
   foodServices: string[];
-  customFoodMenu: string;
+  customFoodMenu?: string;
 }
 
-class FacilityService {
-  // Get facilities for a specific hostel
-  async getHostelFacilities(hostelId: string): Promise<FacilitiesResponse> {
-    return await ApiClient.get<FacilitiesResponse>(
-      `/hostel-operations/facilities/student/${hostelId}`
-    );
-  }
-
-  // Parse and transform API data
-  parseFacilitiesData(apiData: FacilitiesResponse['data']): ParsedFacilities {
-    // Parse sharing types to get numbers
-    const sharingNumbers = apiData.sharingTypes
-      .map(type => {
-        const match = type.match(/(\d+)\s*Sharing/);
-        return match ? parseInt(match[1], 10) : null;
-      })
-      .filter((num): num is number => num !== null)
-      .sort((a, b) => a - b);
-
-    return {
-      sharingNumbers,
-      bathroomTypes: apiData.bathroomTypes,
-      essentials: apiData.essentials,
-      foodServices: apiData.foodServices,
-      customFoodMenu: apiData.customFoodMenu
-    };
-  }
-
-  // Convert sharing number to type key
-  sharingNumberToKey(sharingNumber: number): string {
-    switch(sharingNumber) {
-      case 1: return 'single';
-      case 2: return 'double';
-      case 3: return 'triple';
-      case 4: return 'four';
-      case 5: return 'five';
-      case 6: return 'six';
-      case 7: return 'seven';
-      case 8: return 'eight';
-      case 9: return 'nine';
-      case 10: return 'ten';
-      default: return 'single';
+class HostelFacilitiesService {
+  /**
+   * Get facilities for a specific hostel (Public endpoint - no auth needed)
+   */
+  async getFacilities(hostelId: string): Promise<HostelFacilitiesResponse> {
+    try {
+      console.log(`📡 Fetching facilities for hostel: ${hostelId}`);
+      
+      // Use the public endpoint for students to get hostel facilities
+      const response = await ApiClient.get<HostelFacilitiesResponse>(
+        `/students/hostels/${hostelId}/facilities`
+      );
+      
+      console.log('✅ Facilities fetched successfully:', {
+        success: response.success,
+        hasData: !!response.data,
+        hostelName: response.data?.hostelName
+      });
+      
+      return response;
+    } catch (error: any) {
+      console.error('❌ Error fetching hostel facilities:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      throw error;
     }
   }
 
-  // Convert sharing number to display label
-  sharingNumberToLabel(sharingNumber: number): string {
-    return `${sharingNumber} Sharing`;
+  /**
+   * Transform API response to match the expected format in HostelDetails
+   */
+  transformFacilitiesData(apiData: any): TransformedFacilities {
+    return {
+      sharingTypes: apiData.sharingTypes || [],
+      bathroomTypes: apiData.bathroomTypes || [],
+      essentials: apiData.essentials || [],
+      foodServices: apiData.foodServices || [],
+      customFoodMenu: apiData.customFoodMenu || ''
+    };
   }
 
-  // Check if sharing type exists
-  hasSharingType(apiData: FacilitiesResponse['data'], sharingNumber: number): boolean {
-    const label = this.sharingNumberToLabel(sharingNumber);
-    return apiData.sharingTypes.includes(label);
-  }
-
-  // Get all available sharing types from API
-  getAvailableSharingTypes(apiData: FacilitiesResponse['data']): number[] {
-    return this.parseFacilitiesData(apiData).sharingNumbers;
+  /**
+   * Get and transform facilities in one call
+   */
+  async getAndTransformFacilities(hostelId: string): Promise<TransformedFacilities> {
+    try {
+      const response = await this.getFacilities(hostelId);
+      
+      if (response.success && response.data) {
+        return this.transformFacilitiesData(response.data);
+      }
+      
+      return {
+        sharingTypes: [],
+        bathroomTypes: [],
+        essentials: [],
+        foodServices: [],
+        customFoodMenu: ''
+      };
+    } catch (error) {
+      console.error('Error in getAndTransformFacilities:', error);
+      return {
+        sharingTypes: [],
+        bathroomTypes: [],
+        essentials: [],
+        foodServices: [],
+        customFoodMenu: ''
+      };
+    }
   }
 }
 
-export default new FacilityService();
+export default new HostelFacilitiesService();

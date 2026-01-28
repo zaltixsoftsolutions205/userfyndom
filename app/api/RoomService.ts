@@ -1,7 +1,8 @@
+// app/api/RoomService.ts
 import ApiClient from "./ApiClient";
 
 export interface Room {
-  _id: string;
+  _id?: string;
   floor: string;
   roomNumber: string;
   sharingType: string;
@@ -9,21 +10,30 @@ export interface Room {
   occupied: number;
   remaining: number;
   isAvailable: boolean;
-  status: string;
+  status?: string;
+}
+
+export interface BedAvailabilityBySharing {
+  sharingType: string;
+  totalBeds: number;
+  availableBeds: number;
+  occupiedBeds: number;
 }
 
 export interface SharingTypeAvailability {
   available: boolean;
-  totalRooms: number;
-  availableRooms: number;
+  totalRooms?: number;
+  availableRooms?: number;
   totalBeds: number;
   availableBeds: number;
+  occupiedBeds?: number;
 }
 
 export interface RoomsSummary {
   totalBeds: number;
   occupiedBeds: number;
-  vacantBeds: number;
+  vacantBeds?: number;
+  availableBeds: number;
   totalRooms: number;
 }
 
@@ -40,11 +50,19 @@ export interface SharingTypeAvailabilityMap {
   ten: SharingTypeAvailability;
 }
 
+export interface HostelInfo {
+  hostelId: string;
+  hostelName: string;
+  hostelType: string;
+}
+
+// Updated to match ACTUAL API response structure
 export interface RoomsResponse {
   success: boolean;
   data: {
+    hostelInfo: HostelInfo;
     rooms: Room[];
-    sharingTypeAvailability: SharingTypeAvailabilityMap;
+    bedAvailabilityBySharing: BedAvailabilityBySharing[]; // This is the key array
     summary: RoomsSummary;
   };
 }
@@ -71,14 +89,132 @@ class RoomService {
     );
   }
 
-  // Get available beds count by sharing type - TYPE SAFE VERSION
+  // Helper to transform API response to match expected format
+  private transformApiResponse(apiResponse: RoomsResponse['data']): {
+    rooms: Room[];
+    sharingTypeAvailability: SharingTypeAvailabilityMap;
+    summary: RoomsSummary;
+  } {
+    // Initialize all sharing types with default values
+    const sharingTypeAvailability: SharingTypeAvailabilityMap = {
+      single: { available: false, totalBeds: 0, availableBeds: 0 },
+      double: { available: false, totalBeds: 0, availableBeds: 0 },
+      triple: { available: false, totalBeds: 0, availableBeds: 0 },
+      four: { available: false, totalBeds: 0, availableBeds: 0 },
+      five: { available: false, totalBeds: 0, availableBeds: 0 },
+      six: { available: false, totalBeds: 0, availableBeds: 0 },
+      seven: { available: false, totalBeds: 0, availableBeds: 0 },
+      eight: { available: false, totalBeds: 0, availableBeds: 0 },
+      nine: { available: false, totalBeds: 0, availableBeds: 0 },
+      ten: { available: false, totalBeds: 0, availableBeds: 0 }
+    };
+
+    // Process bedAvailabilityBySharing array
+    if (apiResponse.bedAvailabilityBySharing && Array.isArray(apiResponse.bedAvailabilityBySharing)) {
+      apiResponse.bedAvailabilityBySharing.forEach(item => {
+        const typeKey = this.getSharingTypeKey(item.sharingType);
+        if (isSharingTypeKey(typeKey)) {
+          sharingTypeAvailability[typeKey] = {
+            available: item.availableBeds > 0,
+            totalBeds: item.totalBeds,
+            availableBeds: item.availableBeds,
+            occupiedBeds: item.occupiedBeds
+          };
+        }
+      });
+    }
+
+    // Calculate room counts for each sharing type
+    const roomCounts: Record<string, { total: number; available: number }> = {};
+    
+    apiResponse.rooms?.forEach(room => {
+      const typeKey = this.getSharingTypeKey(room.sharingType);
+      if (!roomCounts[typeKey]) {
+        roomCounts[typeKey] = { total: 0, available: 0 };
+      }
+      roomCounts[typeKey].total++;
+      if (room.isAvailable) {
+        roomCounts[typeKey].available++;
+      }
+    });
+
+    // Add room counts to availability
+    Object.keys(sharingTypeAvailability).forEach(key => {
+      if (isSharingTypeKey(key) && roomCounts[key]) {
+        sharingTypeAvailability[key].totalRooms = roomCounts[key].total;
+        sharingTypeAvailability[key].availableRooms = roomCounts[key].available;
+      }
+    });
+
+    return {
+      rooms: apiResponse.rooms || [],
+      sharingTypeAvailability,
+      summary: {
+        totalBeds: apiResponse.summary?.totalBeds || 0,
+        occupiedBeds: apiResponse.summary?.occupiedBeds || 0,
+        vacantBeds: apiResponse.summary?.availableBeds || 0,
+        totalRooms: apiResponse.summary?.totalRooms || 0
+      }
+    };
+  }
+
+  // Get hostel rooms with transformed response
+  async getHostelRoomsTransformed(hostelId: string): Promise<{
+    success: boolean;
+    data: {
+      rooms: Room[];
+      sharingTypeAvailability: SharingTypeAvailabilityMap;
+      summary: RoomsSummary;
+      originalData?: any;
+    };
+  }> {
+    const response = await this.getHostelRooms(hostelId);
+    
+    if (response.success && response.data) {
+      const transformedData = this.transformApiResponse(response.data);
+      return {
+        success: true,
+        data: {
+          ...transformedData,
+          originalData: response.data // Keep original for reference
+        }
+      };
+    }
+    
+    // Return empty structure if API fails
+    return {
+      success: false,
+      data: {
+        rooms: [],
+        sharingTypeAvailability: {
+          single: { available: false, totalBeds: 0, availableBeds: 0 },
+          double: { available: false, totalBeds: 0, availableBeds: 0 },
+          triple: { available: false, totalBeds: 0, availableBeds: 0 },
+          four: { available: false, totalBeds: 0, availableBeds: 0 },
+          five: { available: false, totalBeds: 0, availableBeds: 0 },
+          six: { available: false, totalBeds: 0, availableBeds: 0 },
+          seven: { available: false, totalBeds: 0, availableBeds: 0 },
+          eight: { available: false, totalBeds: 0, availableBeds: 0 },
+          nine: { available: false, totalBeds: 0, availableBeds: 0 },
+          ten: { available: false, totalBeds: 0, availableBeds: 0 }
+        },
+        summary: {
+          totalBeds: 0,
+          occupiedBeds: 0,
+          vacantBeds: 0,
+          totalRooms: 0
+        }
+      }
+    };
+  }
+
+  // Get available beds count by sharing type - UPDATED VERSION
   getAvailableBedsBySharingType(
-    roomsData: RoomsResponse['data'],
+    roomsData: { sharingTypeAvailability: SharingTypeAvailabilityMap },
     sharingType: string
   ): number {
     const typeKey = this.getSharingTypeKey(sharingType);
     
-    // Use the type guard
     if (isSharingTypeKey(typeKey)) {
       return roomsData.sharingTypeAvailability[typeKey]?.availableBeds || 0;
     }
@@ -135,7 +271,7 @@ class RoomService {
   }
 
   // Get all available sharing types
-  getAvailableSharingTypes(roomsData: RoomsResponse['data']): string[] {
+  getAvailableSharingTypes(roomsData: { sharingTypeAvailability: SharingTypeAvailabilityMap }): string[] {
     const availableTypes: string[] = [];
     const sharingTypes: SharingTypeKey[] = [
       'single', 'double', 'triple', 'four', 'five', 
@@ -151,33 +287,47 @@ class RoomService {
     return availableTypes;
   }
 
-  // Get rooms by sharing type - TYPE SAFE VERSION
-  getRoomsBySharingType(roomsData: RoomsResponse['data'], sharingType: string): Room[] {
+  // Get rooms by sharing type
+  getRoomsBySharingType(rooms: Room[], sharingType: string): Room[] {
     const typeKey = this.getSharingTypeKey(sharingType);
     
-    if (!isSharingTypeKey(typeKey)) {
-      return [];
-    }
-    
-    return roomsData.rooms.filter(room =>
+    return rooms.filter(room =>
       this.getSharingTypeKey(room.sharingType) === typeKey && room.isAvailable
     );
   }
 
-  // SIMPLE METHOD: Get available beds with type assertion (if you really need it)
-  getAvailableBedsBySharingTypeSimple(
-    roomsData: RoomsResponse['data'],
+  // Check if a sharing type is available (has beds)
+  isSharingTypeAvailable(
+    roomsData: { sharingTypeAvailability: SharingTypeAvailabilityMap }, 
     sharingType: string
-  ): number {
+  ): boolean {
     const typeKey = this.getSharingTypeKey(sharingType);
     
-    // Method 1: Use any (simplest)
-    const availability = roomsData.sharingTypeAvailability as any;
-    return availability[typeKey]?.availableBeds || 0;
+    if (isSharingTypeKey(typeKey)) {
+      const availability = roomsData.sharingTypeAvailability[typeKey];
+      return availability?.available && (availability.availableBeds > 0);
+    }
+    
+    return false;
+  }
+
+  // Get total available beds across all sharing types
+  getTotalAvailableBeds(roomsData: { sharingTypeAvailability: SharingTypeAvailabilityMap }): number {
+    let total = 0;
+    const sharingTypes: SharingTypeKey[] = [
+      'single', 'double', 'triple', 'four', 'five', 
+      'six', 'seven', 'eight', 'nine', 'ten'
+    ];
+
+    sharingTypes.forEach(type => {
+      total += roomsData.sharingTypeAvailability[type]?.availableBeds || 0;
+    });
+
+    return total;
   }
 
   // Get all sharing types with their availability
-  getAllSharingTypesWithAvailability(roomsData: RoomsResponse['data']): 
+  getAllSharingTypesWithAvailability(roomsData: { sharingTypeAvailability: SharingTypeAvailabilityMap }): 
     Array<{type: SharingTypeKey; display: string; availability: SharingTypeAvailability}> {
     
     const result: Array<{type: SharingTypeKey; display: string; availability: SharingTypeAvailability}> = [];
@@ -197,44 +347,29 @@ class RoomService {
     return result;
   }
 
-  // Check if a sharing type is available (has beds)
-  isSharingTypeAvailable(roomsData: RoomsResponse['data'], sharingType: string): boolean {
-    const typeKey = this.getSharingTypeKey(sharingType);
-    
-    if (isSharingTypeKey(typeKey)) {
-      const availability = roomsData.sharingTypeAvailability[typeKey];
-      return availability?.available && (availability.availableBeds > 0);
-    }
-    
-    return false;
-  }
-
-  // Get total available beds across all sharing types
-  getTotalAvailableBeds(roomsData: RoomsResponse['data']): number {
-    let total = 0;
-    const sharingTypes: SharingTypeKey[] = [
-      'single', 'double', 'triple', 'four', 'five', 
-      'six', 'seven', 'eight', 'nine', 'ten'
-    ];
-
-    sharingTypes.forEach(type => {
-      total += roomsData.sharingTypeAvailability[type]?.availableBeds || 0;
-    });
-
-    return total;
-  }
-
   // Helper to get all valid sharing type keys
   getAllSharingTypeKeys(): SharingTypeKey[] {
     return ['single', 'double', 'triple', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
   }
 
   // Get availability for a specific type (type-safe)
-  getSharingTypeAvailability(roomsData: RoomsResponse['data'], typeKey: string): SharingTypeAvailability | null {
+  getSharingTypeAvailability(
+    roomsData: { sharingTypeAvailability: SharingTypeAvailabilityMap }, 
+    typeKey: string
+  ): SharingTypeAvailability | null {
     if (isSharingTypeKey(typeKey)) {
       return roomsData.sharingTypeAvailability[typeKey];
     }
     return null;
+  }
+
+  // NEW: Direct method to get availability from bedAvailabilityBySharing array
+  getBedAvailabilityFromArray(bedAvailabilityArray: BedAvailabilityBySharing[], sharingType: string): number {
+    const typeKey = this.getSharingTypeKey(sharingType);
+    const availability = bedAvailabilityArray.find(item => 
+      this.getSharingTypeKey(item.sharingType) === typeKey
+    );
+    return availability?.availableBeds || 0;
   }
 }
 
