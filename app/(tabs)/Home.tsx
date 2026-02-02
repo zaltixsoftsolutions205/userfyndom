@@ -1,4 +1,4 @@
-// app/(tabs)/Home.tsx - UPDATED FOR LOCATION-BASED SEARCH
+// app/(tabs)/Home.tsx - FIXED: NO AUTO NEARBY SELECTION
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -130,7 +130,8 @@ export default function Home() {
   const [priceInput, setPriceInput] = useState(maxPrice.toString());
   const [selectedGender, setSelectedGender] = useState<string>("");
 
-  const [selectedLocationKey, setSelectedLocationKey] = useState<string>("nearby");
+  // FIX: No default selection
+  const [selectedLocationKey, setSelectedLocationKey] = useState<string>("");
   const [loadingLocationData, setLoadingLocationData] = useState(false);
 
   const [allHostels, setAllHostels] = useState<any[]>([]);
@@ -228,7 +229,8 @@ export default function Home() {
       .slice(0, 6);
   };
 
-  const getUserLocation = async () => {
+  // FIX: Only get user location when explicitly requested
+  const getUserLocation = async (requestForNearby = false) => {
     try {
       setLocationLoading(true);
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -253,6 +255,11 @@ export default function Home() {
         } else {
           setDetectedLocation("Your location");
         }
+        
+        // Only fetch nearby hostels if requested for "Nearby" feature
+        if (requestForNearby) {
+          return { latitude, longitude };
+        }
       } else {
         setDetectedLocation("Location permission denied");
       }
@@ -262,6 +269,7 @@ export default function Home() {
     } finally {
       setLocationLoading(false);
     }
+    return null;
   };
 
   const fetchAllHostels = async () => {
@@ -274,6 +282,7 @@ export default function Home() {
       if (response.success && response.data) {
         setAllHostels(response.data);
         setFilteredHostels(response.data);
+        // FIX: Show all hostels by default, not nearby
         setHostelsToShow(response.data);
 
         const forYou = getForYouHostels(response.data);
@@ -345,18 +354,18 @@ export default function Home() {
     }
   };
 
-  const fetchNearbyHostels = async () => {
+  // FIX: Renamed to be more clear - only fetches nearby hostels
+  const fetchNearbyHostelsExplicitly = async () => {
     try {
       setLoadingLocationData(true);
       
-      if (!userLocation) {
-        await getUserLocation();
-      }
+      // First get user location
+      const location = await getUserLocation(true);
       
-      if (userLocation) {
+      if (location) {
         const response = await LocationService.getNearbyHostels(
-          userLocation.latitude,
-          userLocation.longitude,
+          location.latitude,
+          location.longitude,
           10
         );
         
@@ -364,9 +373,11 @@ export default function Home() {
           setLocationHostels(response.data);
           setHostelsToShow(response.data);
         } else {
+          // Fallback to all hostels
           setHostelsToShow(allHostels);
         }
       } else {
+        // If location permission denied or failed, show all hostels
         setHostelsToShow(allHostels);
       }
     } catch (error) {
@@ -402,13 +413,16 @@ export default function Home() {
     }
   };
 
+  // FIX: Cleaner location selection handler
   const handleLocationSelect = async (locationKey: string) => {
+    // Clear any previous selection
+    const prevSelected = selectedLocationKey;
     setSelectedLocationKey(locationKey);
     setLoadingLocationData(true);
     
     try {
       if (locationKey === "nearby") {
-        await fetchNearbyHostels();
+        await fetchNearbyHostelsExplicitly();
       } else {
         const selectedLocation = locations.find(loc => loc.key === locationKey);
         if (selectedLocation) {
@@ -426,16 +440,19 @@ export default function Home() {
       }
     } catch (error) {
       console.error("Error in handleLocationSelect:", error);
+      // Revert to previous selection
+      setSelectedLocationKey(prevSelected);
       setHostelsToShow(allHostels);
     } finally {
       setLoadingLocationData(false);
     }
   };
 
+  // FIX: Initialize without automatic nearby selection
   useEffect(() => {
     const initializeApp = async () => {
       try {
-        await getUserLocation();
+        // Only fetch all hostels and user data
         await fetchAllHostels();
         await fetchUserData();
         
@@ -480,12 +497,14 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [currentBannerIndex]);
 
+  // FIX: Updated filtering logic
   useEffect(() => {
     let filtered = allHostels;
     
+    // Only apply location filter if a location is selected
     if (selectedLocationKey === "nearby") {
-      filtered = locationHostels;
-    } else if (areaHostels.length > 0) {
+      filtered = locationHostels.length > 0 ? locationHostels : allHostels;
+    } else if (selectedLocationKey && areaHostels.length > 0) {
       filtered = areaHostels;
     }
 
@@ -513,13 +532,22 @@ export default function Home() {
 
     setFilteredHostels(filtered);
     
+    // Update "For You" and "Featured" sections
     const forYou = getForYouHostels(filtered);
     const featured = getFeaturedHostels(filtered);
     
     setForYouHostels(forYou);
     setFeaturedHostels(featured);
     
-  }, [searchText, selectedAmenities, selectedSharingTypes, selectedGender, maxPrice, allHostels, locationHostels, areaHostels]);
+  }, [searchText, selectedAmenities, selectedSharingTypes, selectedGender, maxPrice, allHostels, locationHostels, areaHostels, selectedLocationKey]);
+
+  // FIX: Add clear location selection
+  const clearLocationSelection = () => {
+    setSelectedLocationKey("");
+    setHostelsToShow(allHostels);
+    setLocationHostels([]);
+    setAreaHostels([]);
+  };
 
   const toggleAmenity = (item: string) => {
     setSelectedAmenities(selectedAmenities.includes(item) ? 
@@ -560,6 +588,7 @@ export default function Home() {
     setSelectedGender("");
     setMaxPrice(20000);
     setPriceInput("20000");
+    clearLocationSelection();
   };
 
   const removeFilter = (type: string, value?: any) => {
@@ -576,6 +605,9 @@ export default function Home() {
       case 'price':
         setMaxPrice(20000);
         setPriceInput("20000");
+        break;
+      case 'location':
+        clearLocationSelection();
         break;
       case 'all':
         clearAllFilters();
@@ -761,7 +793,9 @@ Download Fyndom Now: https://fyndom.app/download`;
   };
 
   const renderFilterChips = () => {
-    if (!hasActiveFilters) return null;
+    const hasLocationFilter = selectedLocationKey !== "";
+
+    if (!hasActiveFilters && !hasLocationFilter) return null;
 
     return (
       <View style={styles.filterChipsContainer}>
@@ -770,6 +804,20 @@ Download Fyndom Now: https://fyndom.app/download`;
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.filterChipsContent}
         >
+          {hasLocationFilter && (
+            <View style={styles.filterChip}>
+              <Text style={styles.filterChipText}>
+                {locations.find(loc => loc.key === selectedLocationKey)?.label || 'Location'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => removeFilter('location')}
+                style={styles.filterChipClose}
+              >
+                <Ionicons name="close" size={16} color="#219150" />
+              </TouchableOpacity>
+            </View>
+          )}
+
           {maxPrice < 20000 && (
             <View style={styles.filterChip}>
               <Text style={styles.filterChipText}>Price: Up to ₹{maxPrice}</Text>
@@ -904,8 +952,16 @@ Download Fyndom Now: https://fyndom.app/download`;
           <View style={styles.locationRow}>
             <Ionicons name="location-outline" size={18} color="#000" />
             <Text style={styles.locationDetectText}>
-              {locationLoading ? "Detecting location..." : detectedLocation}
+              {locationLoading ? "Detecting location..." : detectedLocation || "Tap location icon to detect"}
             </Text>
+            {!detectedLocation && (
+              <TouchableOpacity 
+                onPress={() => getUserLocation(false)} 
+                style={styles.locationRefreshButton}
+              >
+                <Ionicons name="refresh" size={16} color="#219150" />
+              </TouchableOpacity>
+            )}
           </View>
           
           <Text style={styles.welcomeText}>
@@ -931,7 +987,7 @@ Download Fyndom Now: https://fyndom.app/download`;
               <Ionicons
                 name="options-outline"
                 size={20}
-                color={hasActiveFilters ? "#219150" : "#555"}
+                color={hasActiveFilters || selectedLocationKey !== "" ? "#219150" : "#555"}
                 style={{ marginLeft: 8 }}
               />
             </TouchableOpacity>
@@ -1261,6 +1317,10 @@ const styles = StyleSheet.create({
     fontWeight: "normal", 
     color: "#000000", 
     marginLeft: 6 
+  },
+  locationRefreshButton: {
+    marginLeft: 8,
+    padding: 4,
   },
   welcomeText: {
     fontSize: 18,
